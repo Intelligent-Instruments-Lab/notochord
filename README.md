@@ -20,7 +20,7 @@ brew install fluidsynth
 ```
 fluidsynth needs a soundfont to run, like this one: https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view
 
-run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="From iipyper" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
+run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
 
 ## Notochord MIDI Apps
 
@@ -37,8 +37,12 @@ the ``homunculus'' gives you a UI to manage multiple input, harmonizing or auton
 ```
 python -m notochord homunculus
 ```
-
 You can set the MIDI in and out ports with `--midi-in` and `--midi-out`. If you use a General MIDI synthesizer like fluidsynth, you can add `--send-pc` to also send program change messages.
+
+If you are using fluidsynth, try:
+```
+python -m notochord homunculus --send-pc --midi-out fluidsynth --thru
+```
 
 ## Python API
 
