@@ -11,7 +11,7 @@ import numpy as np
 from time import time
 
 def main(host="127.0.0.1", receive_port=9999, send_port=None, 
-        checkpoint="artifacts/notochord-latest.ckpt"):
+        checkpoint="notochord-latest.ckpt"):
     osc = OSC(host, receive_port)
 
     if checkpoint is not None:

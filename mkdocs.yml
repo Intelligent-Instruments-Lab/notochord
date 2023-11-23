@@ -37,14 +37,16 @@ theme:
     - navigation.path
     - navigation.top
     - toc.follow
+    - content.code.copy
+    - content.code.select
 
-copyright: ©️ Intelligent Instrumets Lab
+copyright: ©️ Intelligent Instruments Lab
 extra:
   generator: false
   social:
     - icon: material/link
       link: https://iil.is
-      name: Intelligent Instrumets Lab
+      name: Intelligent Instruments Lab
     - icon: material/email-outline
       link: mailto:iil@lhi.is
     - icon: fontawesome/brands/facebook
@@ -61,6 +63,15 @@ extra:
       link: https://github.com/intelligent-instruments-lab
     - icon: fontawesome/brands/linkedin
       link: https://www.linkedin.com/company/intelligent-instruments-lab
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
 
 extra_css:
   - stylesheets/extra.css
