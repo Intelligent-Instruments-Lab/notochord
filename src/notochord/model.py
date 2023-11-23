@@ -1132,7 +1132,10 @@ class Notochord(nn.Module):
         hyperparameters and model weights.
         """
         if path=="notochord-latest.ckpt":
-            path = Path(__file__).parent / '../../artifacts' / path
+            import appdirs
+            d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
+            d.mkdir(exist_ok=True)
+            path = d / path
             # maybe download
             if not path.is_file():
                 while True:

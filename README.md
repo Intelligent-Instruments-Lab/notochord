@@ -20,11 +20,11 @@ brew install fluidsynth
 ```
 fluidsynth needs a soundfont to run, like this one: https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view
 
-run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
+run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="From iipyper" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
 
 ## Notochord MIDI Apps
 
-These iipyper apps can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.
+Notochord includes several [iipyper](https://github.com/Intelligent-Instruments-Lab/iipyper.git) apps which can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.
 
 The Notochord harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure the `iil-python-tools` conda environment is active (`conda activate iil-python-tools`) and run:
 ```
