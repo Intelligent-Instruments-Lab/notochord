@@ -13,8 +13,8 @@ numpy = "^1.23"
 pandas = "^1.5"
 tqdm = "^4.64"
 sf2utils = "^0.9"
-iipyper = {git = "ssh://git@github.com/Intelligent-Instruments-Lab/iipyper.git"}
 appdirs = "^1.4.4"
+iipyper = {path = "../iipyper", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.5.3"

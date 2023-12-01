@@ -367,6 +367,9 @@ class Notochord(nn.Module):
                 t[:] = new_t
 
             self.h_query = None
+            
+            self.step += 1
+
 
     # TODO: add end prediction to deep_query
     def deep_query(self, query, predict_end=True):
@@ -1058,14 +1061,14 @@ class Notochord(nn.Module):
                 pred_vel = pred_vel.item()
                 end = end.item()
 
-            self.step += 1
             r = {
-                'end': end,
-                'step': self.step,
                 'inst': pred_inst,
                 'pitch': pred_pitch, 
                 'time': pred_time,
                 'vel': pred_vel,
+
+                'end': end,
+                'step': self.step,
             }
 
             if handle is not None:
