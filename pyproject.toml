@@ -14,7 +14,7 @@ pandas = "^1.5"
 tqdm = "^4.64"
 sf2utils = "^0.9"
 appdirs = "^1.4.4"
-iipyper = "0.1.*"
+iipyper = {path = "../iipyper", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.5.3"
