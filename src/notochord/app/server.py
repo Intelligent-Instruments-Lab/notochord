@@ -33,15 +33,15 @@ def main(host="127.0.0.1", receive_port=9999, send_port=None,
         print(f"{address} {kw}")
         r = predictor.query(**kw) 
         return (
-            '/return'+address, 
+            '/return/notochord/query', 
             *[x for pair in r.items() for x in pair])
     
     @osc.handle('/notochord/query_feed', return_port=send_port)
     def _(address, **kw):
         print(f"{address} {kw}")
-        r = predictor.query(**kw) 
+        r = predictor.query_feed(**kw) 
         return (
-            '/return'+address, 
+            '/return/notochord/query', 
             *[x for pair in r.items() for x in pair])
     
     @osc.handle('/notochord/feed_query', return_port=send_port)
@@ -49,7 +49,7 @@ def main(host="127.0.0.1", receive_port=9999, send_port=None,
         print(f"{address} {a} {kw}")
         r = predictor.feed_query(*a, **kw) 
         return (
-            '/return'+address, 
+            '/return/notochord/query', 
             *[x for pair in r.items() for x in pair])
 
     @osc.handle('/notochord/reset', return_port=send_port)
