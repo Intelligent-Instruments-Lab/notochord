@@ -709,20 +709,32 @@ class Notochord(nn.Module):
     # TODO: remove pitch_topk and sweep_time?
     # TODO: rewrite this to build queries and dispatch to deep_query
     def query(self,
-            next_inst=None, next_pitch=None, next_time=None, next_vel=None,
-            pitch_topk=None, index_pitch=None,
-            allow_end=False,
-            sweep_time=False, 
-            min_time=None, max_time=None,
-            truncate_quantile_time=None,
-            include_inst=None, exclude_inst=None,
-            include_pitch=None, exclude_pitch=None,
-            truncate_quantile_pitch=None,
-            allow_anon=True, include_drum=None,
-            instrument_temp=None, pitch_temp=None, velocity_temp=None,
-            rhythm_temp=None, timing_temp=None,
-            min_vel=None, max_vel=None,
-            handle=None, return_params=False):
+            next_inst:int=None, next_pitch:int=None, 
+            next_time:float=None, next_vel:int=None,
+
+            allow_end:bool=False,
+
+            include_inst:List[int]=None, exclude_inst:List[int]=None,
+            allow_anon:bool=True, 
+            instrument_temp:float=None, 
+
+            include_pitch:List[int]=None, exclude_pitch:List[int]=None,
+            include_drum:List[int]=None,
+            truncate_quantile_pitch:Tuple[float,float]=None,
+            pitch_temp:float=None, 
+            index_pitch:int=None,
+
+            min_time:float=None, max_time:float=None,
+            truncate_quantile_time:Tuple[float, float]=None,
+            rhythm_temp:float=None, timing_temp:float=None,
+
+            min_vel:int=None, max_vel:int=None,
+            velocity_temp:float=None,
+
+            pitch_topk:int=None, sweep_time:bool=False, 
+
+            handle:str=None, return_params:bool=False
+            ):
         """
         return a prediction for the next note.
 
@@ -730,61 +742,89 @@ class Notochord(nn.Module):
 
         Args:
             # hard constraints
-            next_*: same as the arguments to feed, but to fix a value for the predicted note.
+
+            next_inst: fix a particular instrument for the predicted note.
                 sampled values will always condition on fixed values, so passing
                 `next_inst=1`, for example, will make the event appropriate
                 for the piano (instrument 1) to play.
+            next_pitch: fix a particular MIDI number for the predicted note.
+                sampled values will always condition on fixed values, so passing
+                `next_pitch=60`, for example, will make the event appropriate
+                for a middle C.
+            next_time: fix a particular delta time for the predicted note.
+                sampled values will always condition on fixed values, so passing
+                `next_time=0`, for example, will make the event appropriate
+                for one which is concurrent with the previous event.
+            next_vel: fix a particular velocity for the predicted note.
+                sampled values will always condition on fixed values, so passing
+                `next_inst=0`, for example, will make the event appropriate
+                for a noteOff (i.e., something which is currently playing).
                 
             # partial constraints
-            allow_end: if False, zero probability of sampling the end marker
-            min_time, max_time: if not None, truncate the time distribution
+
             include_inst: instrument id(s) to include in sampling.
                 (if not None, all others will be excluded)
             exclude_inst: instrument id(s) to exclude from sampling.
+            allow_anon: bool. if False, zero probability of anon instruments
+
             include_pitch: pitch(es) to include in sampling.
                 (if not None, all others will be excluded)
             exclude_pitch: pitch(es) to exclude from sampling.
-            allow_anon: bool. if False, zero probability of anon instruments
             include_drum: like `include_pitch`, but only in effect when 
                 instrument is a drumkit
-            min_vel, max_vel: if not None, truncate the velocity distribution
+
+            min_time: if not None, truncate the time distribution below
+            max_time: if not None, truncate the time distribution above
+
+            min_vel: if not None, truncate the velocity distribution below
+                e.g., `min_vel=1` prevents NoteOff events
+            max_vel: if not None, truncate the velocity distribution above
+
+            allow_end: if False, zero probability of sampling the end marker
 
             # sampling strategies
-            truncate_quantile_pitch: applied after include_pitch, exclude_pitch
-            truncate_quantile_time: applied after min_time, max_time
+            
             instrument_temp: if not None, apply top_p sampling to instrument. 0 is
                 deterministic, 1 is 'natural' according to the model
+
             pitch_temp: if not None, apply top_p sampling to pitch. 0 is
                 deterministic, 1 is 'natural' according to the model
-            velocity_temp: if not None, apply temperature sampling to the velocity
-                component.
-            rhythm_temp: if not None, apply top_p sampling to the weighting
-                of mixture components. this affects coarse rhythmic patterns;
-                0 is deterministic, 1 is 'natural' according to the model
+            truncate_quantile_pitch: applied after include_pitch, exclude_pitch
+                truncate the remaining pitch distribution by quantile.
+                e.g. truncate_quantile_pitch=(0.25, 0.75)
+                excludes the lowest- and highest- pitch 25% of probability mass
+            index_pitch: if not None, deterministically take the
+                nth most likely pitch instead of sampling.
+
             timing_temp: if not None, apply temperature sampling to the time
                 component. this affects fine timing; 0 is deterministic and 
                 precise, 1 is 'natural' according to the model.
-            index_pitch: Optional[int]. if not None, deterministically take the
-                nth most likely pitch instead of sampling.
+            rhythm_temp: if not None, apply top_p sampling to the weighting
+                of mixture components. this affects coarse rhythmic patterns;
+                0 is deterministic, 1 is 'natural' according to the model
+            truncate_quantile_time: applied after min_time, max_time
+                truncate the remaining delta time distribution by quantile.
+                e.g. truncate_quantile_time=(0.25, 0.75)
+                excludes the soonest- and furthest- 25% of probability mass
+
+            velocity_temp: if not None, apply temperature sampling to the velocity
+                component.
 
             # multiple predictions
+
             pitch_topk: Optional[int]. if not None, instead of sampling pitch, 
                 stack the top k most likely pitches along the batch dimension
             sweep_time: if True, instead of sampling time, choose a diverse set
                 of times and stack along the batch dimension
 
             # other
+
             handle: metadata to be included in the returned dict, if not None
             return_params: if True, return tensors of distribution parameters
                 under the keys `inst_params`, `pitch_params`, `time_params`,
                 and `vel_params`.
 
         Returns: dict of
-            'end': int. value of 1 indicates the *current* event (the one 
-                passed as arguments to `predict`) was the last event, and the
-                predicted event should *not* be played. if `allow end` is false, 
-                this will always be 0.
-            'step': int. number of steps since calling `reset`.
             'inst': int. id of predicted instrument.
                 1-128 are General MIDI standard melodic instruments
                 129-256 are drumkits for MIDI programs 1-128
@@ -794,8 +834,13 @@ class Notochord(nn.Module):
             'time': float. predicted time to next note in seconds.
             'vel': float. unquantized predicted velocity of next note.
                 0-127; hard 0 indicates a note-off event.
+            'end': int. value of 1 indicates the *current* event (the one 
+                passed as arguments to `predict`) was the last event, and the
+                predicted event should *not* be played. if `allow end` is false, 
+                this will always be 0.
+            'step': int. number of steps since calling `reset`.
             '*_params': tensor. distribution parameters for visualization
-                purposes.
+                and debugging purposes. present if `return_params` is True.
 
             note: `instrument`, `pitch`, `time`, `velocity` may return lists,
                 when using `sweep_time` or `pitch_topk`. that part of the API 
@@ -1145,6 +1190,7 @@ class Notochord(nn.Module):
                     answer = input("Do you want to download a notochord model? (y/n)")
                     if answer.lower() in ["y","yes"]:
                         download_url('https://github.com/Intelligent-Instruments-Lab/iil-python-tools/releases/download/notochord-v0.4.0/notochord_lakh_50G_deep.pt', path)
+                        print(f'saved to {path}')
                         break
                     if answer.lower() in ["n","no"]:
                         break
