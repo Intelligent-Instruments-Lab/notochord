@@ -734,7 +734,7 @@ class Notochord(nn.Module):
             pitch_topk:int=None, sweep_time:bool=False, 
 
             handle:str=None, return_params:bool=False
-            ):
+            ) -> dict:
         """
         return a prediction for the next note.
 
@@ -824,7 +824,7 @@ class Notochord(nn.Module):
                 under the keys `inst_params`, `pitch_params`, `time_params`,
                 and `vel_params`.
 
-        Returns: dict of
+        Returns:
             'inst': int. id of predicted instrument.
                 1-128 are General MIDI standard melodic instruments
                 129-256 are drumkits for MIDI programs 1-128
@@ -842,9 +842,9 @@ class Notochord(nn.Module):
             '*_params': tensor. distribution parameters for visualization
                 and debugging purposes. present if `return_params` is True.
 
-            note: `instrument`, `pitch`, `time`, `velocity` may return lists,
-                when using `sweep_time` or `pitch_topk`. that part of the API 
-                is very experimental and likely to break.
+        NOTE: `instrument`, `pitch`, `time`, `velocity` may return lists,
+            when using `sweep_time` or `pitch_topk`. that part of the API 
+            is very experimental and likely to break.
         """
          # validate options:
         if (index_pitch is not None) and (pitch_temp is not None):
