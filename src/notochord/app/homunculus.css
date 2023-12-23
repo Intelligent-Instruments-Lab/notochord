@@ -64,6 +64,20 @@ MixerButtons Button {
     height:3;
 }
 
+InstrumentSelect Grid {
+    grid-size: 8 16;
+}
+InstrumentSelect Button {
+    border: none;
+    min-width: 5;
+    height: 2;
+    /* border-top: none; */
+    /* border-bottom: none; */
+    /* border-left: none; */
+    /* border-right: none; */
+
+}
+
 /* MixerButtons Button {
     height: 5;
     border: solid purple;

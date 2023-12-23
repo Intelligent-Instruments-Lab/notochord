@@ -41,7 +41,9 @@ from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lo
 from rich.panel import Panel
 from rich.pretty import Pretty
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Static, Button, RichLog, Switch, Checkbox
+from textual.widgets import Header, Footer, Static, Button, RichLog, Label
+from textual.screen import Screen
+from textual.containers import Grid
 
 def main(
     checkpoint="notochord-latest.ckpt", # Notochord checkpoint
@@ -343,18 +345,17 @@ def main(
                 'note_on' if vel > 0 else 'note_off', 
                 note=event['pitch'], velocity=vel, channel=channel-1)
 
-        # feed to NotoPerformance
-        # put a stopwatch in the held_note_data field for tracking note length
-        history.feed(held_note_data={
-            'duration':Stopwatch(),
-            'parent':parent
-            }, channel=channel, **event)
-
         # print
         display_event(tag, memo=memo, channel=channel, **event)
 
-        # feed to Notochord
         if feed:
+            # feed to NotoPerformance
+            # put a stopwatch in the held_note_data field for tracking note length
+            history.feed(held_note_data={
+                'duration':Stopwatch(),
+                'parent':parent
+                }, channel=channel, **event)
+            # feed to model
             noto.feed(**event)
 
         follow_status['depth'] += 1
@@ -507,8 +508,8 @@ def main(
                     next_inst=inst, next_pitch=pitch,
                     next_vel=0, min_time=t, max_time=t+0.5)
                 print(f'END STUCK NOTE {inst=},{pitch=}')
+                tui(prediction=pending.event)
                 return
-
 
         # all_insts = mode_insts(('auto', 'input', 'follow'), allow_muted=True)
         # counts = history.inst_counts(n=n_recent, insts=all_insts)
@@ -763,6 +764,7 @@ def main(
     ### update_* keeps the UI in sync with the state
 
     def update_config():
+        # print(config)
         for c,v in config.items():
             tui.set_channel(c, v)
 
@@ -815,8 +817,29 @@ def main(
         if update:
             update_config()
 
+    class InstrumentSelect(Screen):
+        """Screen with an instrument select dialog."""
+        def __init__(self, c):
+            super().__init__()
+            self.channel = c
+
+        def compose(self):
+            yield Grid(
+                *[
+                    Button(s, id='select_'+inst_id(i)) 
+                    for i,s in enumerate(gm_names, 1)
+                ], id="dialog",
+            )
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            # print(event.button.id)
+            # i = 1
+            i = int(event.button.id.split('_')[-1])
+            self.app.pop_screen()
+            set_inst(self.channel, i)
+    # inst_select = InstrumentSelect(None)
+
     def set_inst(c, i, update=True):
-        print('SET INSTRUMENT')
+        print(f'SET INSTRUMENT {i}')
         if c in config:
             prev_i = config[c]['inst']
         else:
@@ -879,8 +902,11 @@ def main(
     def action_inst(c):
         print(f'inst channel {c}')
         # TODO: instrument picker
-        i = 1
-        set_inst(c, i)
+        tui.push_screen(InstrumentSelect(c))
+        # inst_select.channel = c
+        # tui.push_screen(inst_select)
+        # i = 1
+        # set_inst(c, i)
 
     def action_mute(c):
         if i not in config: return
@@ -985,19 +1011,21 @@ class MixerButtons(Static):
         yield Button(
             f"{self.idx:02d}", 
             id=mode_id(self.idx),
-            # variant="primary",
             classes="cmode"
             )
+        # yield Select(
+        #     [(s,i+1) for i,s in enumerate(gm_names)], 
+        #     id=inst_id(self.idx),
+        #     classes="cinst"
+        #     )
         yield Button(
             f"--- \n-----\n-----", 
             id=inst_id(self.idx),
-            # variant="warning",
             classes="cinst"
             )
         yield Button(
             f"MUTE", 
             id=mute_id(self.idx),
-            # variant="error",
             classes="cmute"
             )
         
@@ -1040,6 +1068,7 @@ class NotoTUI(TUI):
         node.label = name
 
     def set_channel(self, chan, cfg):
+        # print(f'set_channel {cfg}')
         inst_node = self.query_one('#'+inst_id(chan))
         mode_node = self.query_one('#'+mode_id(chan))
         mute_node = self.query_one('#'+mute_id(chan))
