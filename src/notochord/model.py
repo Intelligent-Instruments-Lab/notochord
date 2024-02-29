@@ -663,7 +663,7 @@ class Notochord(nn.Module):
                     truncate_quantile=None if self.is_drum(i) else truncate_quantile_pitch,
                     then=Query(
                         'time', path,         
-                        truncate=(min_time or -torch.inf, max_time or torch.inf), truncate_quantile=None if i in no_steer else truncate_quantile_time
+                        truncate=(min_time or -torch.inf, max_time or torch.inf), truncate_quantile=None if (no_steer is not None and i in no_steer) else truncate_quantile_time
                     )
                 )) for i,ps in note_map.items() if len(ps)]
             )

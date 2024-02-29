@@ -825,10 +825,10 @@ def main(
 
         def compose(self):
             yield Grid(
-                *[
+                *(
                     Button(s, id='select_'+inst_id(i)) 
                     for i,s in enumerate(gm_names, 1)
-                ], id="dialog",
+                ), id="dialog",
             )
         def on_button_pressed(self, event: Button.Pressed) -> None:
             # print(event.button.id)

@@ -112,7 +112,7 @@ class NotoPerformance:
     def inst_counts(self, n=0, insts=None):
         """instrument counts in last n (default all) note_ons"""
         df = self.events
-        df = df.iloc[-min(128,n*4):] # in case of very long history
+        df = df.iloc[-min(128,n*16):] # in case of very long history
         df = df.loc[df.vel > 0]
         df = df.iloc[-n:]
         counts = df.inst.value_counts()
