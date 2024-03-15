@@ -47,7 +47,10 @@ class Trainer:
         txala_remap = False,
         txala_permute = False,
         min_valid = 8,
-        min_test = 8
+        min_test = 8,
+        aug_speed=0.1,
+        aug_transpose=5,
+        aug_remap=True
         ):
         """TODO: Trainer __init__ docstring"""
         kw = locals(); kw.pop('self')
@@ -99,11 +102,13 @@ class Trainer:
             self.dataset = TxalaDataset(data_dir, self.batch_len, 
                 remap=txala_remap, permute=txala_permute)
         else:
-            self.dataset = MIDIDataset(data_dir, self.batch_len)
+            self.dataset = MIDIDataset(data_dir, self.batch_len,
+                speed=aug_speed, transpose=aug_transpose, remap_instruments=aug_remap)
             
         valid_len = max(min_valid, int(len(self.dataset)*0.03))
         test_len = max(min_test, int(len(self.dataset)*0.02))
         train_len = len(self.dataset) - valid_len - test_len
+        print(f'{valid_len=} {test_len=} {train_len=}')
         self.train_dataset, self.valid_dataset, self.test_dataset = torch.utils.data.random_split(
             self.dataset, [train_len, valid_len, test_len], 
             generator=torch.Generator().manual_seed(0))
