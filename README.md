@@ -9,7 +9,9 @@ Notochord is a neural network model for MIDI performances. This package contains
 
 ## Getting Started
 
-Using your python environment manager of choice (i.e. virtualenv, [conda](https://github.com/conda-forge/miniforge)), make a new environment with a Python version between 3.10-3.12. Then `pip install git+ssh://git@github.com/Intelligent-Instruments-Lab/notochord.git#egg=notochord`
+Using your python environment manager of choice (i.e. virtualenv, [conda](https://github.com/conda-forge/miniforge)), make a new environment with a Python version at least 3.10. Then `pip install notochord`.
+
+For developing `notochord`, see our [dev repo](https://github.com/Intelligent-Instruments-Lab/iil-dev.git)
 
 <!-- Follow the instructions in the root repo to set up an `iil-python-tools` environment. Then download a model checkpoint (e.g. `notochord_lakh_50G_deep.pt`) from the releases page: https://github.com/Intelligent-Instruments-Lab/iil-python-tools/releases . From here, I'll assume the model file is saved at `~/Downloads/notochord_lakh_50G_deep.pt`. -->
 
