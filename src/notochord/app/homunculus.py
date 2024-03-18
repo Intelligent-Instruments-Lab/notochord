@@ -80,6 +80,22 @@ def main(
     thru_vel_offset=None
     ):
     """
+    This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. Arguments to main can be given on the command line as flags, for example:
+
+    `python -m notochord homunculus --initial-query --config '{1:{mode:auto, inst:1}}'`
+    
+    16 voices correspond to the 16 MIDI channels. Each voice can be in one of three modes:
+
+        * input (appearing like "-->01"), voice 1 comes from MIDI input channel 1.
+        * follow (appearing like "01->02"), voice 2 plays whenever voice 1 plays.
+        * auto (appearing like just "03"), voice 3 plays autonomously.
+
+    Click the top section of each channel to cycle the mode.
+
+    Each voice is also assigned a [General MIDI instrument](https://en.wikipedia.org/wiki/General_MIDI#Program_change_events). Each 'input' and 'auto' voice should have a unique General MIDI instrument, but 'follow' voices can be duplicates of other voices. 
+
+
+
     Args:
         checkpoint: path to notochord model checkpoint.
 
@@ -545,6 +561,10 @@ def main(
         time_offset = -5e-3 if nominal_time else 10e-3
         min_time = stopwatch.read()+time_offset
 
+        # idea: maintain an 'instrument presence' quantity
+        # incorporating time since / number of notes was playing
+        # ideally this would distinguish sustained from percussive instruments too
+        
         # balance_sample: note-ons only from instruments which have played less
         inst_weights = None
         if balance_sample:

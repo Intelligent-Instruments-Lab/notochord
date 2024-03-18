@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "notochord"
-version = "0.5.0"
+version = "0.5.1b0"
 description = " Notochord is a real-time neural network model for MIDI performances. "
 authors = ["Victor Shepardson <victor.shepardson@gmail.com>"]
 license = "MIT"
@@ -14,7 +14,7 @@ pandas = "^1.5"
 tqdm = "^4.64"
 sf2utils = "^0.9"
 appdirs = "^1.4.4"
-iipyper = "~0.1.0"
+iipyper = {path = "../iipyper", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.5.3"
