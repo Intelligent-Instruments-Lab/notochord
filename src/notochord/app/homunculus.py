@@ -90,11 +90,15 @@ def main(
         * follow (appearing like "01->02"), voice 2 plays whenever voice 1 plays.
         * auto (appearing like just "03"), voice 3 plays autonomously.
 
-    Click the top section of each channel to cycle the mode.
+    Click the top section of each voice to cycle the mode.
 
     Each voice is also assigned a [General MIDI instrument](https://en.wikipedia.org/wiki/General_MIDI#Program_change_events). Each 'input' and 'auto' voice should have a unique General MIDI instrument, but 'follow' voices can be duplicates of other voices. 
 
+    Click the middle section of each voice to choose a new instrument.
 
+    The bottom section of each voice allows muting individual voices.
+
+    Along the bottom, there are global query, sustain, mute and reset buttons. Query manually replaces the next pending note. Sustain stops all auto voices from playing without ending any open notes. Mute ends all open notes and stops auto voices. Reset ends all open notes, forgets all context and sets the Notochord model to its initial state.
 
     Args:
         checkpoint: path to notochord model checkpoint.
