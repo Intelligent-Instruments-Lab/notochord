@@ -41,7 +41,9 @@ from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lo
 from rich.panel import Panel
 from rich.pretty import Pretty
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Static, Button, RichLog, Switch, Checkbox
+from textual.widgets import Header, Footer, Static, Button, RichLog, Label
+from textual.screen import Screen
+from textual.containers import Grid
 
 def main(
     checkpoint="notochord-latest.ckpt", # Notochord checkpoint
@@ -78,6 +80,26 @@ def main(
     thru_vel_offset=None
     ):
     """
+    This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. Arguments to main can be given on the command line as flags, for example:
+
+    `python -m notochord homunculus --initial-query --config '{1:{mode:auto, inst:1}}'`
+    
+    16 voices correspond to the 16 MIDI channels. Each voice can be in one of three modes:
+
+        * input (appearing like "-->01"), voice 1 comes from MIDI input channel 1.
+        * follow (appearing like "01->02"), voice 2 plays whenever voice 1 plays.
+        * auto (appearing like just "03"), voice 3 plays autonomously.
+
+    Click the top section of each voice to cycle the mode.
+
+    Each voice is also assigned a [General MIDI instrument](https://en.wikipedia.org/wiki/General_MIDI#Program_change_events). Each 'input' and 'auto' voice should have a unique General MIDI instrument, but 'follow' voices can be duplicates of other voices. 
+
+    Click the middle section of each voice to choose a new instrument.
+
+    The bottom section of each voice allows muting individual voices.
+
+    Along the bottom, there are global query, sustain, mute and reset buttons. Query manually replaces the next pending note. Sustain stops all auto voices from playing without ending any open notes. Mute ends all open notes and stops auto voices. Reset ends all open notes, forgets all context and sets the Notochord model to its initial state.
+
     Args:
         checkpoint: path to notochord model checkpoint.
 
@@ -343,18 +365,17 @@ def main(
                 'note_on' if vel > 0 else 'note_off', 
                 note=event['pitch'], velocity=vel, channel=channel-1)
 
-        # feed to NotoPerformance
-        # put a stopwatch in the held_note_data field for tracking note length
-        history.feed(held_note_data={
-            'duration':Stopwatch(),
-            'parent':parent
-            }, channel=channel, **event)
-
         # print
         display_event(tag, memo=memo, channel=channel, **event)
 
-        # feed to Notochord
         if feed:
+            # feed to NotoPerformance
+            # put a stopwatch in the held_note_data field for tracking note length
+            history.feed(held_note_data={
+                'duration':Stopwatch(),
+                'parent':parent
+                }, channel=channel, **event)
+            # feed to model
             noto.feed(**event)
 
         follow_status['depth'] += 1
@@ -507,8 +528,8 @@ def main(
                     next_inst=inst, next_pitch=pitch,
                     next_vel=0, min_time=t, max_time=t+0.5)
                 print(f'END STUCK NOTE {inst=},{pitch=}')
+                tui(prediction=pending.event)
                 return
-
 
         # all_insts = mode_insts(('auto', 'input', 'follow'), allow_muted=True)
         # counts = history.inst_counts(n=n_recent, insts=all_insts)
@@ -544,6 +565,10 @@ def main(
         time_offset = -5e-3 if nominal_time else 10e-3
         min_time = stopwatch.read()+time_offset
 
+        # idea: maintain an 'instrument presence' quantity
+        # incorporating time since / number of notes was playing
+        # ideally this would distinguish sustained from percussive instruments too
+        
         # balance_sample: note-ons only from instruments which have played less
         inst_weights = None
         if balance_sample:
@@ -763,6 +788,7 @@ def main(
     ### update_* keeps the UI in sync with the state
 
     def update_config():
+        # print(config)
         for c,v in config.items():
             tui.set_channel(c, v)
 
@@ -815,8 +841,29 @@ def main(
         if update:
             update_config()
 
+    class InstrumentSelect(Screen):
+        """Screen with an instrument select dialog."""
+        def __init__(self, c):
+            super().__init__()
+            self.channel = c
+
+        def compose(self):
+            yield Grid(
+                *(
+                    Button(s, id='select_'+inst_id(i)) 
+                    for i,s in enumerate(gm_names, 1)
+                ), id="dialog",
+            )
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            # print(event.button.id)
+            # i = 1
+            i = int(event.button.id.split('_')[-1])
+            self.app.pop_screen()
+            set_inst(self.channel, i)
+    # inst_select = InstrumentSelect(None)
+
     def set_inst(c, i, update=True):
-        print('SET INSTRUMENT')
+        print(f'SET INSTRUMENT {i}')
         if c in config:
             prev_i = config[c]['inst']
         else:
@@ -879,8 +926,11 @@ def main(
     def action_inst(c):
         print(f'inst channel {c}')
         # TODO: instrument picker
-        i = 1
-        set_inst(c, i)
+        tui.push_screen(InstrumentSelect(c))
+        # inst_select.channel = c
+        # tui.push_screen(inst_select)
+        # i = 1
+        # set_inst(c, i)
 
     def action_mute(c):
         if i not in config: return
@@ -985,19 +1035,21 @@ class MixerButtons(Static):
         yield Button(
             f"{self.idx:02d}", 
             id=mode_id(self.idx),
-            # variant="primary",
             classes="cmode"
             )
+        # yield Select(
+        #     [(s,i+1) for i,s in enumerate(gm_names)], 
+        #     id=inst_id(self.idx),
+        #     classes="cinst"
+        #     )
         yield Button(
             f"--- \n-----\n-----", 
             id=inst_id(self.idx),
-            # variant="warning",
             classes="cinst"
             )
         yield Button(
             f"MUTE", 
             id=mute_id(self.idx),
-            # variant="error",
             classes="cmute"
             )
         
@@ -1040,6 +1092,7 @@ class NotoTUI(TUI):
         node.label = name
 
     def set_channel(self, chan, cfg):
+        # print(f'set_channel {cfg}')
         inst_node = self.query_one('#'+inst_id(chan))
         mode_node = self.query_one('#'+mode_id(chan))
         mute_node = self.query_one('#'+mute_id(chan))

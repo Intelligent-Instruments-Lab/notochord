@@ -7,6 +7,7 @@ Authors:
 
 from notochord import Notochord
 from iipyper import OSC, run
+from iipyper.types import *
 import numpy as np
 from time import time
 
@@ -17,64 +18,54 @@ def main(host="127.0.0.1", receive_port=9999, send_port=None,
     if checkpoint is not None:
         predictor = Notochord.from_checkpoint(checkpoint)
         predictor.eval()
+        predictor.reset()
+        print('notochord created')
     else:
         predictor = None
  
-    @osc.kwargs('/notochord/*', return_port=send_port)
+    @osc.handle('/notochord/feed', return_port=send_port)
+    def _(address, a:Splat[4], **kw):
+        print(f"{address} {a} {kw}")
+        predictor.feed(*a, **kw) 
+
+    @osc.handle('/notochord/query', return_port=send_port)
     def _(address, **kw):
-        """
-        Handle OSC messages to Notochord
-        """
         print(f"{address} {kw}")
+        r = predictor.query(**kw) 
+        return (
+            '/return/notochord/query', 
+            *[x for pair in r.items() for x in pair])
+    
+    @osc.handle('/notochord/query_feed', return_port=send_port)
+    def _(address, **kw):
+        print(f"{address} {kw}")
+        r = predictor.query_feed(**kw) 
+        return (
+            '/return/notochord/query', 
+            *[x for pair in r.items() for x in pair])
+    
+    @osc.handle('/notochord/feed_query', return_port=send_port)
+    def _(address, a:Splat[4], **kw):
+        print(f"{address} {a} {kw}")
+        r = predictor.feed_query(*a, **kw) 
+        return (
+            '/return/notochord/query', 
+            *[x for pair in r.items() for x in pair])
 
-        address = address.split("/")
-        cmd = address[2]
+    @osc.handle('/notochord/reset', return_port=send_port)
+    def _(address, **kw):
+        print(f"{address} {kw}")
+        predictor.reset(**kw) 
 
-        if cmd=="load":
-            # `nonlocal` is needed to assign to closed-over name
-            nonlocal predictor
-            predictor = Notochord.from_checkpoint(**kw)
-            predictor.eval()
+    @osc.handle('/notochord/load', return_port=send_port)
+    def _(address, path:str):
+        # `nonlocal` is needed to assign to closed-over name
+        nonlocal predictor
+        predictor = Notochord.from_checkpoint(path)
+        predictor.eval()
+        predictor.reset()
+        print('notochord created')
 
-        elif predictor is None:
-            print('no model loaded')
-        else:
-
-            if cmd=="feed":
-                r = predictor.feed(**kw) 
-
-            elif cmd=='query':
-                r = predictor.query(**kw) 
-                return ('/notochord/query_return', 
-                    *[x for pair in r.items() for x in pair])
-
-            elif cmd=='query_feed':
-                r = predictor.query_feed(**kw) 
-                return ('/notochord/query_return', 
-                    *[x for pair in r.items() for x in pair])
-
-            elif cmd=="feed_query":
-                r = predictor.feed_query(**kw)
-                return ('/notochord/query_return', 
-                    *[x for pair in r.items() for x in pair])
-
-            elif cmd=="feed_query_feed":
-                r = predictor.feed_query_feed(**kw)
-                return ('/notochord/query_return', 
-                    *[x for pair in r.items() for x in pair])
-
-            elif cmd=="predict":
-                # deprecated
-                t = time()
-                r = predictor.predict(**kw)
-                print(time() - t)
-                return '/prediction', r['inst'], r['pitch'], r['time'], r['vel'], r['end'], r['step']
-
-            elif cmd=="reset":
-                predictor.reset(**kw)
-
-            else:
-                print(f"Notochord: Unrecognised OSC {address} with {kw}")
 
 if __name__=='__main__':
     run(main)

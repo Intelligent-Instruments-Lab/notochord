@@ -140,7 +140,7 @@ def main(
             useful when using a General MIDI synthesizer like fluidsynth.
         dump_midi: if True, print all incoming MIDI for debugging purposes
 
-        balance_sample choose instruments which have played less recently
+        balance_sample: choose instruments which have played less recently
             ensures that all configured instruments will play.
         n_recent: number of recent note-on events to consider for above
         n_margin: amount of 'slack' in the balance_sample calculation

@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 class MIDIDataset(Dataset):
     def __init__(self, data_dir, batch_len, 
         transpose=5, speed=0.1, glob='**/*.pkl', test_len=2048,
-        onsets_only=False):
+        onsets_only=False, remap_instruments=True):
         """
         """
         super().__init__()
@@ -17,6 +17,7 @@ class MIDIDataset(Dataset):
         self.files = []
         for d in dirs:
             self.files.extend(list(Path(d).glob(glob)))
+            # print(self.files)
         self.batch_len = batch_len
         self.transpose = transpose
         self.speed = speed
@@ -26,6 +27,7 @@ class MIDIDataset(Dataset):
         self.testing = False
         self.max_test_len = test_len
         self.onsets_only = onsets_only
+        self.remap_instruments = remap_instruments
         
     def __len__(self):
         return len(self.files)
@@ -193,7 +195,8 @@ class MIDIDataset(Dataset):
         pitch = pitch + transpose
 
         # scramble anonymous and extra parts to 'anonymous melodic' and 'anonymous drum' parts
-        program = self._remap_anonymous_instruments(program)
+        if self.remap_instruments:
+            program = self._remap_anonymous_instruments(program)
 
         time_margin = 1e-3
 
@@ -209,6 +212,7 @@ class MIDIDataset(Dataset):
         velocity = self.velocity_curve(velocity)
 
         return program, pitch, time, velocity
+    
     
 class TxalaDataset(MIDIDataset):
     def __init__(self, *a, 
