@@ -9,11 +9,9 @@ Notochord is a neural network model for MIDI performances. This package contains
 
 ## Getting Started
 
-Using your python environment manager of choice (i.e. virtualenv, [conda](https://github.com/conda-forge/miniforge)), make a new environment with a Python version at least 3.10. Then `pip install notochord`.
+Using your python environment manager of choice (e.g. virtualenv, [conda](https://github.com/conda-forge/miniforge)), make a new environment with a Python version at least 3.10. Then `pip install notochord`.
 
 For developing `notochord`, see our [dev repo](https://github.com/Intelligent-Instruments-Lab/iil-dev.git)
-
-<!-- Follow the instructions in the root repo to set up an `iil-python-tools` environment. Then download a model checkpoint (e.g. `notochord_lakh_50G_deep.pt`) from the releases page: https://github.com/Intelligent-Instruments-Lab/iil-python-tools/releases . From here, I'll assume the model file is saved at `~/Downloads/notochord_lakh_50G_deep.pt`. -->
 
 ### Install fluidsynth (optional)
 [fluidsynth](https://github.com/FluidSynth/fluidsynth) is a General MIDI synthesizer which you can install from the package manager. On macOS:
@@ -28,14 +26,14 @@ run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="flui
 
 Notochord includes several [iipyper](https://github.com/Intelligent-Instruments-Lab/iipyper.git) apps which can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.
 
-The Notochord harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure the `iil-python-tools` conda environment is active (`conda activate iil-python-tools`) and run:
+The Notochord harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
 ```
 python -m notochord harmonizer
 ```
 try `python -m notochord harmonizer --help`
 to see more options.
 
-the ``homunculus'' gives you a UI to manage multiple input, harmonizing or autonomous notochord channels:
+the "homunculus" gives you a UI to manage multiple input, harmonizing or autonomous notochord channels:
 ```
 python -m notochord homunculus
 ```
@@ -48,7 +46,7 @@ python -m notochord homunculus --send-pc --midi-out fluidsynth --thru
 
 ## Python API
 
-See the docstrings for `Notochord.feed` and `Notochord.query` in `notochord/model.py` for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
+See the docs for `Notochord.feed` and `Notochord.query` for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
 
 ## OSC server
 
@@ -62,11 +60,11 @@ this will run notochord and listen continously for OSC messages.
 
 ## Tidal interface
 
-see `examples/notochord/tidalcycles` in the archived [iil-python-tools](https://github.com/Intelligent-Instruments-Lab/iil-python-tools/tree/master/examples) repo (updated examples coming soon):
+see `notochord/tidalcycles` in [iil-examples](https://github.com/Intelligent-Instruments-Lab/iil-examples.git) repo (updated examples coming soon):
 
 add `Notochord.hs` to your tidal boot file. Probably replace the `tidal <- startTidal` line with something like:
 ```haskell
-:script ~/iil-python-tools/examples/notochord/tidalcycles/Notochord.hs
+:script ~/iil-examples/notochord/tidalcycles/Notochord.hs
 
 let sdOscMap = (superdirtTarget, [superdirtShape])
 let oscMap = [sdOscMap,ncOscMap]
