@@ -1129,7 +1129,6 @@ class Notochord(nn.Module):
 
             return r
 
-
     def predict(self, inst, pitch, time, vel, **kw):
         """
         DEPRECATED: alias for feed_query
@@ -1139,15 +1138,16 @@ class Notochord(nn.Module):
 
     def feed_query(self, inst, pitch, time, vel, **kw):
         """
-        call self.feed with *args, then self.query with **kwargs.
+        feed an event to the model, 
+        then query for the next predicted event and return it.
         """
         self.feed(inst, pitch, time, vel)
         return self.query(**kw)
 
     def query_feed(self, *a, **kw):
         """
-        call self.query with *args **kwargs, then self.feed with result,
-            and return result
+        query for the next predicted event and immediately feed it to the model,
+        also returning the predicted event.
         """
         r = self.query(*a, **kw)
         self.feed(r['inst'], r['pitch'], r['time'], r['vel'])
@@ -1155,7 +1155,8 @@ class Notochord(nn.Module):
 
     def feed_query_feed(self, inst, pitch, time, vel, **kw):
         """
-        call self.feed with *args, then self.query with **kwargs.
+        given an event, return the next predicted event, 
+        feeding both to the model.
         """
         self.feed(inst, pitch, time, vel)
         return self.query_feed(**kw)
@@ -1167,17 +1168,26 @@ class Notochord(nn.Module):
             start: if True, send start tokens through the model
         """
         self.step = 0
-        for n,t in zip(self.cell_state_names(), self.initial_state):
-            getattr(self, n)[:] = t.detach()
-        if start:
-            self.feed(
-                self.instrument_start_token, self.pitch_start_token, 0., 0.)
+        with torch.inference_mode():
+            for n,t in zip(self.cell_state_names(), self.initial_state):
+                getattr(self, n)[:] = t
+            if start:
+                self.feed(
+                    self.instrument_start_token, self.pitch_start_token, 0., 0.)
+        # for n,t in zip(self.cell_state_names(), self.initial_state):
+        #     getattr(self, n)[:] = t.detach()
+        # if start:
+        #     self.feed(
+        #         self.instrument_start_token, self.pitch_start_token, 0., 0.)
 
     @classmethod
     def from_checkpoint(cls, path):
         """
         create a Notochord from a checkpoint file containing 
         hyperparameters and model weights.
+
+        Args:
+            path: file path to Notochord model
         """
         if path=="notochord-latest.ckpt":
             import appdirs

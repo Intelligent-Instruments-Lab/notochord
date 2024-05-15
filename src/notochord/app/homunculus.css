@@ -5,10 +5,10 @@ TUI {
 NotoControl {
     layout: horizontal;
     background: $boost;
-    height: 5;
-    margin: 1;
+    height: 4;
+    # margin: 1;
     min-width: 50;
-    padding: 1;
+    # padding: 1;
     dock: bottom;
 }
 
@@ -71,10 +71,6 @@ InstrumentSelect Button {
     border: none;
     min-width: 5;
     height: 2;
-    /* border-top: none; */
-    /* border-bottom: none; */
-    /* border-left: none; */
-    /* border-right: none; */
 
 }
 
@@ -88,9 +84,10 @@ NotoPrediction {
     height: 3;
 }
 
-TextLog {
-    height: 1fr;
-    border: solid purple;
+NotoLog {
+    height: 0.5fr;
+    # border: tall purple;
+    outline-top: double purple;
 }
 
 Button {

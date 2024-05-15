@@ -24,6 +24,8 @@ Authors:
 # TODO: counts / weights display panel
 # TODO: MIDI learn
 
+import time
+
 from typing import Optional, Dict, Any
 from numbers import Number
 import math
@@ -31,8 +33,12 @@ import functools as ft
 import json
 from pathlib import Path
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
+
+import torch
+torch.set_num_threads(1)
 
 import iipyper, notochord
 from notochord import Notochord, NotoPerformance
@@ -41,7 +47,7 @@ from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lo
 from rich.panel import Panel
 from rich.pretty import Pretty
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Static, Button, RichLog, Label
+from textual.widgets import Header, Footer, Static, Button, Log, RichLog, Label
 from textual.screen import Screen
 from textual.containers import Grid
 
@@ -77,7 +83,8 @@ def main(
     estimated_latency=1e-2,
     soundfont=None,
     limit_input=None,
-    thru_vel_offset=None
+    thru_vel_offset=None,
+    profiler=0,
     ):
     """
     This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. Arguments to main can be given on the command line as flags, for example:
@@ -314,6 +321,8 @@ def main(
     try:
         noto = Notochord.from_checkpoint(checkpoint)
         noto.eval()
+        noto.feed(0,0,0,0)
+        noto.query()
         noto.reset()
     except Exception:
         print("""error loading notochord model""")
@@ -341,10 +350,12 @@ def main(
         """print an event to the terminal"""
         if tag is None:
             return
-        s = f'{tag}:\t {inst=:4d}    {pitch=:4d}    {vel=:4d}    {channel=:3d}'
+        now = str(datetime.now())[:-2]
+        s = f'{now}   inst {inst:3d}   pitch {pitch:3d}   vel {vel:3d}   ch {channel:2d} {tag}'
+        # s = f'{tag}:\t{inst=:4d}   {pitch=:4d}   {vel=:4d}   {channel=:3d}'
         if memo is not None:
-            s += f'    ({memo})'
-        tui(note=s)
+            s += f' ({memo})'
+        tui.defer(note=s)
 
     def play_event(
             event, channel, 
@@ -361,28 +372,34 @@ def main(
 
         # send out as MIDI
         if send:
-            midi.send(
-                'note_on' if vel > 0 else 'note_off', 
-                note=event['pitch'], velocity=vel, channel=channel-1)
+            with profile('\tmidi.send', print=print, enable=profiler>1):
+                midi.send(
+                    'note_on' if vel > 0 else 'note_off', 
+                    note=event['pitch'], velocity=vel, channel=channel-1)
 
         # print
-        display_event(tag, memo=memo, channel=channel, **event)
+        with profile('\tdisplay_event', print=print, enable=profiler>1):
+            display_event(
+                tag, memo=memo, channel=channel, **event)
 
         if feed:
             # feed to NotoPerformance
             # put a stopwatch in the held_note_data field for tracking note length
-            history.feed(held_note_data={
-                'duration':Stopwatch(),
-                'parent':parent
-                }, channel=channel, **event)
+            with profile('\thistory.feed', print=print, enable=profiler>1):
+                history.feed(held_note_data={
+                    'duration':Stopwatch(),
+                    'parent':parent
+                    }, channel=channel, **event)
             # feed to model
-            noto.feed(**event)
+            with profile('\tnoto.feed', print=print, enable=profiler>1):
+                noto.feed(**event)
 
         follow_status['depth'] += 1
-        # print(f'{follow_status=}')
-        follow_event(event, channel)
-        follow_status['depth'] -= 1
-        # print(f'{follow_status=}')
+        with profile('\t'*follow_status['depth']+'follow.event', print=print, enable=profiler>1):
+            # print(f'{follow_status=}')
+            follow_event(event, channel)
+            follow_status['depth'] -= 1
+            # print(f'{follow_status=}')
 
     def follow_event(source_event, source_channel):
         source_vel = source_event['vel']
@@ -454,7 +471,7 @@ def main(
 
         # cancel pending predictions
         pending.event = None
-        tui(prediction=pending.event)
+        tui.defer(prediction=pending.event)
         
         # end Notochord held notes
         # for (chan,inst,pitch) in history.note_triples:
@@ -465,12 +482,13 @@ def main(
                     channel=note.chan, 
                     feed=False, # skip feeding Notochord since we are resetting it
                     tag='NOTO', memo='reset')
-        # reset stopwatch
-        stopwatch.punch()
+                
         # reset notochord state
         noto.reset()
         # reset history
         history.push()
+        # reset stopwatch
+        stopwatch.punch()
 
         # TODO: feed note-ons from any held input/follower notes?
 
@@ -497,7 +515,7 @@ def main(
             return
         # cancel pending predictions
         pending.event = None
-        tui(prediction=pending.event)
+        tui.defer(prediction=pending.event)
 
         if sustain:
             return
@@ -522,13 +540,13 @@ def main(
                 and dur > max_note_len*(.1+controls.get('steer_duration', 1))
                 ):
                 # query for the end of a note with flexible timing
-                # with profile('query', print=print):
+                # with profile('query', print=print, enable=profiler):
                 t = stopwatch.read()
                 pending.event = noto.query(
                     next_inst=inst, next_pitch=pitch,
                     next_vel=0, min_time=t, max_time=t+0.5)
                 print(f'END STUCK NOTE {inst=},{pitch=}')
-                tui(prediction=pending.event)
+                tui.defer(prediction=pending.event)
                 return
 
         # all_insts = mode_insts(('auto', 'input', 'follow'), allow_muted=True)
@@ -536,7 +554,7 @@ def main(
         counts = defaultdict(int)
         for i,c in history.inst_counts(n=n_recent).items():
             counts[i] = c
-        print(f'{counts=}')
+        # print(f'{counts=}')
 
         inst_modes = ['auto']
         if predict_follow:
@@ -549,7 +567,7 @@ def main(
 
         # held_notes = history.held_inst_pitch_map(all_insts)
         held_notes = history.held_inst_pitch_map()
-        print(f'{held_notes=}')
+        # print(f'{held_notes=}')
 
         steer_time = 1-controls.get('steer_rate', 0.5)
         steer_pitch = controls.get('steer_pitch', 0.5)
@@ -580,7 +598,7 @@ def main(
                 # else:
                     # inst_weights[i] = 1.
 
-        print(f'{inst_weights=}')
+        # print(f'{inst_weights=}')
 
         # VTIP is better for time interventions,
         # VIPT is better for instrument interventions
@@ -607,21 +625,22 @@ def main(
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
         try:
-            pending.event = query_method(
-                note_on_map, note_off_map,
-                min_time=min_time, max_time=max_t,
-                truncate_quantile_time=tqt,
-                truncate_quantile_pitch=tqp,
-                steer_density=steer_density,
-                inst_weights=inst_weights,
-                no_steer=mode_insts(('input','follow'), allow_muted=False),
-            )
+            with profile('\tquery_method', print=print, enable=profiler>1):
+                pending.event = query_method(
+                    note_on_map, note_off_map,
+                    min_time=min_time, max_time=max_t,
+                    truncate_quantile_time=tqt,
+                    truncate_quantile_pitch=tqp,
+                    steer_density=steer_density,
+                    inst_weights=inst_weights,
+                    no_steer=mode_insts(('input','follow'), allow_muted=False),
+                )
         except Exception:
             # print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
             pending.event = None
 
         # display the predicted event
-        tui(prediction=pending.event)
+        tui.defer(prediction=pending.event)
 
     #### MIDI handling
 
@@ -631,20 +650,30 @@ def main(
         def _(msg):
             print(msg)
 
-    @midi.handle(type='program_change')
-    def _(msg):
-        """Program change events set instruments"""
-        raise NotImplementedError
+    # @midi.handle(type='program_change')
+    # def _(msg):
+        # """
+        # Program change events set GM instruments on the corresponding channel
+        # """
+        # raise NotImplementedError
 
     @midi.handle(type='pitchwheel')
     def _(msg):
+        """
+        pitchwheel affects steer_pitch
+        """
         controls['steer_pitch'] = (msg.pitch+8192)/16384
         # print(controls)
 
     # very basic CC handling for controls
     @midi.handle(type='control_change')
     def _(msg):
-        """CC messages on any channel"""
+        """
+        these are global controls listening on all channels: 
+        CC 01: steer pitch (>64 higher pitches, <64 lower)
+        CC 02: steer density (>64 more simultaneous notes, <64 fewer)
+        CC 03: steer rate (>64 more events, <64 fewer)
+        """
 
         if msg.control==1:
             controls['steer_pitch'] = msg.value/127
@@ -665,7 +694,7 @@ def main(
 
     # very basic OSC handling for controls
     if osc_port is not None:
-        @osc.args('/notochord/improviser/*')
+        @osc.args('/notochord/homunculus/*')
         def _(route, *a):
             print('OSC:', route, *a)
             ctrl = route.split['/'][3]
@@ -687,7 +716,11 @@ def main(
     input_dts = []
     @midi.handle(type=('note_on', 'note_off'))
     def _(msg):
-        """MIDI NoteOn events from the player"""
+        """
+        MIDI NoteOn and NoteOff events affect input channels
+        e.g. a channel displaying -->01 will listen to note events on channel 1
+        a channel displaying 02->03 will follow note events on channel 2
+        """
         # convert from 0-index
         channel = msg.channel+1
 
@@ -730,7 +763,7 @@ def main(
             return 
 
         # feed event to Notochord
-        # with profile('feed', print=print):
+        # with profile('feed', print=print, enable=profiler):
         play_event(
             {'inst':inst, 'pitch':pitch, 'vel':vel}, 
             channel=channel, send=thru, tag='PLAYER')
@@ -748,6 +781,7 @@ def main(
         chan = auto_inst_channel(inst)
 
         # note on which is already playing or note off which is not
+
         if (vel>0) == ((inst, pitch) in history.note_pairs): 
             print(f're-query for invalid {vel=}, {inst=}, {pitch=}')
             auto_query()
@@ -769,11 +803,13 @@ def main(
             # if so, check if it is a notochord-controlled instrument
             if pending.event['inst'] in mode_insts('auto'):
                 # prediction happens
-                auto_event()
+                with profile('auto_event', print=print, enable=profiler):
+                    auto_event()
             # query for new prediction
             if dt < noto.max_dt and not debug_query:
             # if not debug_query:
-                auto_query()
+                with profile('auto_query', print=print, enable=profiler):
+                    auto_query()
 
     @cleanup
     def _():
@@ -800,7 +836,12 @@ def main(
     def mount():
         update_config()
         update_presets()
-
+        print('welcome to notochord homunculus')
+        print('MIDI handling:')
+        print(midi.get_docs())
+        if osc_port is not None:
+            print('OSC handling:')
+            print(osc.get_docs())
 
     ### set_* does whatever necessary to change channel properties
     ### calls update_config() to keep the UI in sync
@@ -860,7 +901,6 @@ def main(
             i = int(event.button.id.split('_')[-1])
             self.app.pop_screen()
             set_inst(self.channel, i)
-    # inst_select = InstrumentSelect(None)
 
     def set_inst(c, i, update=True):
         print(f'SET INSTRUMENT {i}')
@@ -993,10 +1033,10 @@ def main(
         tui.run()
 
 ### def TUI components ###
-class NotoLog(RichLog):
+class NotoLog(Log):
     value = reactive('')
     def watch_value(self, time: float) -> None:
-        self.write(self.value)
+        self.write_line(self.value)
 
 class NotoPrediction(Static):
     value = reactive(None)
@@ -1037,11 +1077,6 @@ class MixerButtons(Static):
             id=mode_id(self.idx),
             classes="cmode"
             )
-        # yield Select(
-        #     [(s,i+1) for i,s in enumerate(gm_names)], 
-        #     id=inst_id(self.idx),
-        #     classes="cinst"
-        #     )
         yield Button(
             f"--- \n-----\n-----", 
             id=inst_id(self.idx),
@@ -1053,10 +1088,29 @@ class MixerButtons(Static):
             classes="cmute"
             )
         
+    def on_mount(self) -> None:
+        lines = [
+            "cycle channel mode:",
+            f"-->{self.idx:02d}   input from MIDI channel {self.idx}"
+        ]
+        if self.idx > 0: lines.append(
+            f"{self.idx-1:02d}->{self.idx:02d}  follow channel {self.idx-1}")
+        lines.append(
+            f"{self.idx:02d}      notochord plays autonomously"
+        )
+        self.query_one("#"+mode_id(self.idx)).tooltip = '\n'.join(lines)
+        self.query_one("#"+inst_id(self.idx)).tooltip = "open instrument picker"
+        self.query_one("#"+mute_id(self.idx)).tooltip = f"mute channel {self.idx}"
+        
 class NotoPresets(Static):
+    n_presets = 10
     def compose(self):
-        for i in range(10):
+        for i in range(NotoPresets.n_presets):
             yield Button('---', id=preset_id(i))
+
+    def on_mount(self) -> None:
+        for i in range(NotoPresets.n_presets):
+            self.query_one("#"+preset_id(i)).tooltip = f"load preset {i}"
 
 class NotoControl(Static):
     def compose(self):
@@ -1066,6 +1120,12 @@ class NotoControl(Static):
         yield Button("Sustain", id="sustain", variant="primary")
         yield Button("Query", id="query")
         yield Button("Reset", id="reset", variant='warning')
+
+    def on_mount(self) -> None:
+        self.query_one("#mute").tooltip = "master mute notochord"
+        self.query_one("#sustain").tooltip = "master sustain -- prevent any NoteOffs from notochord"
+        self.query_one("#query").tooltip = "manually query a new event"
+        self.query_one("#reset").tooltip = "reset notochord"
 
 class NotoTUI(TUI):
     CSS_PATH = 'homunculus.css'
@@ -1086,6 +1146,9 @@ class NotoTUI(TUI):
         yield NotoPresets()
         yield NotoControl()
         yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one(NotoPrediction).tooltip = "displays the next predicted event"
 
     def set_preset(self, idx, name):
         node = self.query_one('#'+preset_id(idx))

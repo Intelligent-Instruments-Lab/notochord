@@ -7,13 +7,13 @@ from notochord.app import *
 def help():
     print("""
     available subcommands:
-        server: run the Notochord OSC server
+        server: run the Notochord API OSC server
         homunculus: run the Notochord homunculus TUI
         harmonizer: run the Notochord harmonizer TUI
         improviser: run the Notochord improviser TUI
     """)
 
-if __name__=='__main__':
+def _main():
     # print(sys.argv)
     try:
         if sys.argv[1] == 'server':
@@ -32,3 +32,6 @@ if __name__=='__main__':
             help()
     except IndexError:
         help()
+
+if __name__=='__main__':
+    _main()

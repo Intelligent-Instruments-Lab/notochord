@@ -28,20 +28,20 @@ Notochord includes several [iipyper](https://github.com/Intelligent-Instruments-
 
 The Notochord harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
 ```
-python -m notochord harmonizer
+notochord harmonizer
 ```
-try `python -m notochord harmonizer --help`
+try `notochord harmonizer --help`
 to see more options.
 
 the "homunculus" gives you a UI to manage multiple input, harmonizing or autonomous notochord channels:
 ```
-python -m notochord homunculus
+notochord homunculus
 ```
 You can set the MIDI in and out ports with `--midi-in` and `--midi-out`. If you use a General MIDI synthesizer like fluidsynth, you can add `--send-pc` to also send program change messages.
 
 If you are using fluidsynth, try:
 ```
-python -m notochord homunculus --send-pc --midi-out fluidsynth --thru
+notochord homunculus --send-pc --midi-out fluidsynth --thru
 ```
 
 ## Python API
@@ -52,7 +52,7 @@ See the docs for `Notochord.feed` and `Notochord.query` for the low-level Notoch
 
 You can also expose the inference API over Open Sound Control:
 ```
-python -m notochord server
+notochord server
 ```
 this will run notochord and listen continously for OSC messages.
 

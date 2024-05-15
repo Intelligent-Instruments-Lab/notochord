@@ -1,6 +1,6 @@
 {
     "ens1":{
-        "1":{"mode":"input", "inst":29},
+        "1":{"mode":"auto", "inst":29},
         "2":{"mode":"follow", "inst":7, "source":1, 
             "transpose":[3,15], "mute":true},
         "3":{"mode":"follow", "inst":12, "source":2, 
@@ -18,7 +18,7 @@
         "9":{"mode":"follow", "inst":109, "source":8, 
             "transpose":[3,7], "mute":true},
         "10":{"mode":"follow", "inst":129, "source":9, 
-            "mute":true},
+            "mute":true},   
         "11":{"mode":"follow", "inst":122, "source":10, 
             "range":[60,72], "mute":true},
         "12":{"mode":"follow", "inst":48, "source":11, 
