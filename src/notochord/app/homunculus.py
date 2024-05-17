@@ -54,6 +54,8 @@ from textual.containers import Grid
 def main(
     checkpoint="notochord-latest.ckpt", # Notochord checkpoint
     config:Dict[int,Dict[str,Any]]=None, # map MIDI channel : GM instrument
+    preset:str=None,
+    preset_file:Path=None,
 
     initial_mute=False, # start with Notochord muted
     initial_query=False, # let Notochord start playing immediately
@@ -136,6 +138,8 @@ def main(
             Notes:
             no 'input' or 'auto' channels should use the same instrument,
             but 'follow' channels may have the same as an 'input' or 'auto'
+        preset: preset name (in preset file) to load config from
+        preset_file: path to JSON file containing dict of name:config (as above)
 
         initial_mute: start 'auto' voices muted so it won't play with input.
         initial_query: query Notochord immediately,
@@ -215,28 +219,38 @@ def main(
             return sf_inst_ranges.get(i, (0,127))
     else:
         def get_range(i):
-            return 0,127
-    
+            return 0,127  
 
     ### Textual UI
     tui = NotoTUI()
     print = notochord.print = iipyper.print = tui.print
     ###
 
-    with open(Path(__file__).parent / 'preset.json') as f:
-        presets = json.load(f)
+    ### presets and config
+    try:
+        if preset_file is None:
+            with open(Path(__file__).parent / 'preset.json') as f:
+                presets = json.load(f)
+        else:
+            with open(preset_file) as f:
+                presets = json.load(f)
+    except Exception:
+        print('WARNING: failed to load presets file')
+        presets = {}
+
     # convert MIDI channels to int
     presets = {p:{int(k):v for k,v in d.items()} for p,d in presets.items()}
 
-    if config is None: config = 'ens1'
-    if isinstance(config, str):
-        config = presets[config]
+    if preset is None and len(presets):
+        preset = list(presets)[0]
+    if isinstance(preset, str):
+        config = presets[preset]
 
     # defaults
     config_in = config
     def default_config_channel():
         return {'mode':'auto', 'inst':1, 'mute':False, 'mono':False, 'source':1}
-    config = {i:default_config_channel() for i in config_in}
+    config = {i:default_config_channel() for i in range(1,17)}
     for k,v in config_in.items():
         config[k].update(v)
 
@@ -300,22 +314,6 @@ def main(
         raise NotImplementedError
     # TODO:
     # check for repeated insts/channels
-
-    def warn_inst(i):
-        if i > 128:
-            if i < 257:
-                print(f"WARNING: drum instrument {i} selected, be sure to select a drum bank in your synthesizer")
-            else:
-                print(f"WARNING: instrument {i} is not General MIDI")
-
-    def do_send_pc(c, i):
-        warn_inst(i)
-        # convert to 0-index
-        midi.program_change(channel=c-1, program=(i-1)%128)
-
-    if send_pc:
-        for c,i in channel_insts():
-            do_send_pc(c, i)
     
     # load notochord model
     try:
@@ -327,6 +325,35 @@ def main(
     except Exception:
         print("""error loading notochord model""")
         raise
+
+    def warn_inst(i):
+        if i > 128:
+            if i < 257:
+                print(f"WARNING: drum instrument {i} selected, be sure to select a drum bank in your synthesizer")
+            else:
+                print(f"WARNING: instrument {i} is not General MIDI")
+
+    def dedup_inst(c, i):
+        # change to anon if already in use
+        def in_use():
+            return any(
+                c_other!=c and config[c_other]['inst']==i 
+                for c_other in config)
+        if in_use():
+            i = noto.first_anon_like(i)
+        while in_use():
+            i = i+1
+        return i
+
+    def do_send_pc(c, i):
+        warn_inst(i)
+        # convert to 0-index
+        midi.program_change(channel=c-1, program=(i-1)%128)
+
+    for c,i in channel_insts():
+        if send_pc:
+            do_send_pc(c, i)
+        config[c]['inst'] = dedup_inst(c, i)
 
     # main stopwatch to track time difference between MIDI events
     stopwatch = Stopwatch()
@@ -901,6 +928,7 @@ def main(
             i = int(event.button.id.split('_')[-1])
             self.app.pop_screen()
             set_inst(self.channel, i)
+        # TODO: on key pressed esc, q: cancel
 
     def set_inst(c, i, update=True):
         print(f'SET INSTRUMENT {i}')
@@ -909,9 +937,8 @@ def main(
         else:
             prev_i = None
         if prev_i==i:
-            print('SAME INSTRUMENT')
+            # print('SAME INSTRUMENT')
             return
-        # TODO: warn if instrument already in use?
 
         # for (chan,inst,pitch) in history.note_triples:
         for note in history.notes:
@@ -923,6 +950,9 @@ def main(
         # send pc if appropriate
         if send_pc:
             do_send_pc(c, i)
+
+        i = dedup_inst(c, i)
+        
         # then set config
         config[c]['inst'] = i
         # and call:
@@ -1224,7 +1254,7 @@ gm_names = [
     'GTR  \n FRET', 'BRE  \n  ATH', ' SEA \nSHORE', 'BIRD \nTWEET',
     'TELE \nPHONE', 'HELI \nCOPTR', 'APP  \nLAUSE', 'GUN  \n SHOT',  
     ' STD \nDRUMS'
-]
+] + ['DRUM \n  KIT']*127 + ['ANON \n MEL ']*32 + ['ANON \nDRUMS']*32
 def inst_label(i):
     if i is None:
         return f"--- \n-----\n-----"

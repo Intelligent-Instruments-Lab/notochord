@@ -326,6 +326,10 @@ class Notochord(nn.Module):
         # TODO: add a constructor argument to specify which are drums
         # hardcoded for now
         return inst > 128 and inst < 257 or inst > 288
+    def first_anon_like(self, inst):
+        # TODO: add a constructor argument to specify how many anon
+        # hardcoded for now
+        return 288 if self.is_drum(inst) else 257
 
     
     def feed(self, inst, pitch, time, vel, **kw):
@@ -1192,7 +1196,7 @@ class Notochord(nn.Module):
         if path=="notochord-latest.ckpt":
             import appdirs
             d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
-            d.mkdir(exist_ok=True)
+            d.mkdir(exist_ok=True, parents=True)
             path = d / path
             # maybe download
             if not path.is_file():
