@@ -14,7 +14,7 @@
       
       
       <link rel="icon" href="assets/favicon/favicon.ico">
-      <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.23">
+      <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.24">
     
     
       
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#notochord-paper-video" class="md-skip">
+        <a href="#notochord-documentation-paper-video" class="md-skip">
           Skip to content
         </a>
       
@@ -1006,7 +1006,7 @@
 
 
 <!-- BEGIN INCLUDE ../README.md -->
-<h1 id="notochord-paper-video">Notochord (<a href="https://zenodo.org/record/7088404" title="Notochord AIMC 2022 paper">Paper</a> | <a href="https://www.youtube.com/watch?v=mkBKAyudL0A" title="Notochord AIMC 2022 video">Video</a>)</h1>
+<h1 id="notochord-documentation-paper-video">Notochord (<a href="https://intelligent-instruments-lab.github.io/notochord/">Documentation</a> | <a href="https://zenodo.org/record/7088404" title="Notochord AIMC 2022 paper">Paper</a> | <a href="https://www.youtube.com/watch?v=mkBKAyudL0A" title="Notochord AIMC 2022 video">Video</a>)</h1>
 <div align="middle">
 <img alt="Max Ernst, Stratified Rocks, Nature's Gift of Gneiss Lava Iceland Moss 2 kinds of lungwort 2 kinds of ruptures of the perinaeum growths of the heart b) the same thing in a well-polished little box somewhat more expensive, 1920" src="https://user-images.githubusercontent.com/4522484/223191876-251d461a-5bfc-439a-8df0-3841e7c76c4a.jpeg" width="60%" />
 </div>
@@ -1025,18 +1025,20 @@ fluidsynth needs a soundfont to run, like this one: https://drive.google.com/fil
 <p>run fluidsynth in a terminal. For example, <code>fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'</code></p>
 <h2 id="notochord-midi-apps">Notochord MIDI Apps</h2>
 <p>Notochord includes several <a href="https://github.com/Intelligent-Instruments-Lab/iipyper.git">iipyper</a> apps which can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.</p>
-<p>The Notochord harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>notochord harmonizer
+<p>The <code>homunculus</code> provides a text-based graphical interface to manage multiple input, harmonizing or autonomous notochord channels:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>notochord homunculus
+</span></code></pre></div>
+You can set the MIDI in and out ports with <code>--midi-in</code> and <code>--midi-out</code>. If you use a General MIDI synthesizer like fluidsynth, you can add <code>--send-pc</code> to also send program change messages.</p>
+<p>If you are using fluidsynth as above, try:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>notochord homunculus --send-pc --midi-out fluidsynth --thru
+</span></code></pre></div></p>
+<p>Note: on windows, there are no virtual MIDI ports and no system MIDI loopback, so you may need to attach some MIDI devices or run a loopback driver like <a href="https://www.tobias-erichsen.de/software/loopmidi.html">loopMIDI</a> before starting the app.</p>
+<p>There are also two simpler notochord apps: <code>improviser</code> and <code>harmonizer</code>. The harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>notochord harmonizer
 </span></code></pre></div>
 try <code>notochord harmonizer --help</code>
 to see more options.</p>
-<p>the "homunculus" gives you a UI to manage multiple input, harmonizing or autonomous notochord channels:
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>notochord homunculus
-</span></code></pre></div>
-You can set the MIDI in and out ports with <code>--midi-in</code> and <code>--midi-out</code>. If you use a General MIDI synthesizer like fluidsynth, you can add <code>--send-pc</code> to also send program change messages.</p>
-<p>If you are using fluidsynth, try:
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>notochord homunculus --send-pc --midi-out fluidsynth --thru
-</span></code></pre></div></p>
+<p>Development is now focused on <code>homunculus</code>, which is intended to subsume all features of <code>improviser</code> and <code>harmonizer</code>.</p>
 <h2 id="python-api">Python API</h2>
 <p>See the docs for <code>Notochord.feed</code> and <code>Notochord.query</code> for the low-level Notochord inference API which can be used from Python code. <code>notochord/app/simple_harmonizer.py</code> provides a minimal example of how to build an interactive app.</p>
 <h2 id="osc-server">OSC server</h2>
@@ -1221,7 +1223,7 @@ progress can be monitored via tensorboard.</p>
     <script id="__config" type="application/json">{"base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "toc.follow", "content.code.copy", "content.code.select"], "search": "assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="assets/javascripts/bundle.ebd0bdb7.min.js"></script>
+      <script src="assets/javascripts/bundle.081f42fc.min.js"></script>
       
     
   </body>
