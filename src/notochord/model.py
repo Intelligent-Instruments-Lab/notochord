@@ -322,15 +322,21 @@ class Notochord(nn.Module):
         return r
 
 
+    # 0 - start token
+    # 1-128 - melodic
+    # 129-256 - drums
+    # 257-288 - anon melodic
+    # 289-320 - anon drums
     def is_drum(self, inst):
         # TODO: add a constructor argument to specify which are drums
         # hardcoded for now
         return inst > 128 and inst < 257 or inst > 288
+    def is_anon(self, inst):
+        return inst > 256
     def first_anon_like(self, inst):
         # TODO: add a constructor argument to specify how many anon
         # hardcoded for now
-        return 288 if self.is_drum(inst) else 257
-
+        return 289 if self.is_drum(inst) else 257
     
     def feed(self, inst, pitch, time, vel, **kw):
         """consume an event and advance hidden state
@@ -1185,6 +1191,13 @@ class Notochord(nn.Module):
         #         self.instrument_start_token, self.pitch_start_token, 0., 0.)
 
     @classmethod
+    def user_data_dir(cls):
+        import appdirs
+        d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
+        d.mkdir(exist_ok=True, parents=True)
+        return d
+
+    @classmethod
     def from_checkpoint(cls, path):
         """
         create a Notochord from a checkpoint file containing 
@@ -1194,9 +1207,7 @@ class Notochord(nn.Module):
             path: file path to Notochord model
         """
         if path=="notochord-latest.ckpt":
-            import appdirs
-            d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
-            d.mkdir(exist_ok=True, parents=True)
+            d = Notochord.user_data_dir()
             path = d / path
             # maybe download
             if not path.is_file():

@@ -1,7 +1,8 @@
-import sys
+import sys, subprocess
 
 from iipyper import run
 
+from notochord import Notochord
 from notochord.app import *
 
 def help():
@@ -11,6 +12,7 @@ def help():
         homunculus: run the Notochord homunculus TUI
         harmonizer: run the Notochord harmonizer TUI
         improviser: run the Notochord improviser TUI
+        files: show the location of Notochord models and config files on disk
     """)
 
 def _main():
@@ -28,6 +30,11 @@ def _main():
         if sys.argv[1] == 'improviser':
             sys.argv = sys.argv[1:]
             run(improviser)
+        if sys.argv[1] == 'files':
+            d = Notochord.user_data_dir()
+            print(d)
+            # os.system(f"open '{d}'")
+            subprocess.run(('open', d))
         else:
             help()
     except IndexError:

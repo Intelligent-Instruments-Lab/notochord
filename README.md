@@ -26,23 +26,28 @@ run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="flui
 
 Notochord includes several [iipyper](https://github.com/Intelligent-Instruments-Lab/iipyper.git) apps which can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.
 
-The Notochord harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
+The `homunculus` provides a text-based graphical interface to manage multiple input, harmonizing or autonomous notochord channels:
+```
+notochord homunculus
+```
+You can set the MIDI in and out ports with `--midi-in` and `--midi-out`. If you use a General MIDI synthesizer like fluidsynth, you can add `--send-pc` to also send program change messages.
+
+If you are using fluidsynth as above, try:
+```
+notochord homunculus --send-pc --midi-out fluidsynth --thru
+```
+
+Note: on windows, there are no virtual MIDI ports and no system MIDI loopback, so you may need to attach some MIDI devices or run a loopback driver like [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) before starting the app.
+
+There are also two simpler notochord apps: `improviser` and `harmonizer`. The harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
 ```
 notochord harmonizer
 ```
 try `notochord harmonizer --help`
 to see more options.
 
-the "homunculus" gives you a UI to manage multiple input, harmonizing or autonomous notochord channels:
-```
-notochord homunculus
-```
-You can set the MIDI in and out ports with `--midi-in` and `--midi-out`. If you use a General MIDI synthesizer like fluidsynth, you can add `--send-pc` to also send program change messages.
+Development is now focused on `homunculus`, which is intended to subsume all features of `improviser` and `harmonizer`.
 
-If you are using fluidsynth, try:
-```
-notochord homunculus --send-pc --midi-out fluidsynth --thru
-```
 
 ## Python API
 

@@ -64,15 +64,40 @@ MixerButtons Button {
     height:3;
 }
 
-InstrumentSelect Grid {
-    grid-size: 8 16;
+ModalScreen {
+    align: center middle;
 }
-InstrumentSelect Button {
+
+ModalScreen Grid {
+    grid-size: 4 7;
+    grid-gutter: 1 1;
+    # grid-rows: 1fr 3;
+    padding: 0 1;
+    width: 35;
+    height: 22;
+    border: thick $background 80%;
+    background: $surface;
+}
+InstrumentGroup {
     border: none;
     min-width: 5;
     height: 2;
-
 }
+InstrumentSelect Grid {
+    grid-size: 4 5;
+}
+Instrument {
+    border: none;
+    min-width: 5;
+    min-height: 3;
+}
+
+# InstrumentSelect Button {
+#     border: none;
+#     min-width: 5;
+#     height: 2;
+
+# }
 
 /* MixerButtons Button {
     height: 5;
