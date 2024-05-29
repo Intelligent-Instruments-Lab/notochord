@@ -17,10 +17,10 @@ from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lo
 from rich.panel import Panel
 from rich.pretty import Pretty
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Static, Button, TextLog
+from textual.widgets import Header, Footer, Static, Button, Log
 
 ### def TUI components ###
-class NotoLog(TextLog):
+class NotoLog(Log):
     value = reactive('')
     def watch_value(self, time: float) -> None:
         self.write(self.value)
@@ -60,7 +60,7 @@ class NotoTUI(TUI):
 ### end def TUI components###
 
 def main(
-    checkpoint="artifacts/noto-txala-011-0020.ckpt", # Notochord checkpoint
+    checkpoint="txala-latest.ckpt", # Notochord checkpoint
     player_config:Dict[int,int]=None, # map MIDI channel : GM instrument
     noto_config:Dict[int,int]=None, # map MIDI channel : GM instrument
     pitch_set=(41,43,45), # MIDI pitches used
@@ -97,7 +97,8 @@ def main(
     use_tui=True, # run textual UI
     predict_player=True, # forecasted next events can be for player (preserves model distribution, but can lead to Notochord deciding not to play)
     auto_query=True, # query notochord whenever it is unmuted and there is no pending event. generally should be True except for testing purposes.
-    testing=False
+    testing=False,
+    verbose=0
     ):
     """
     Args:
@@ -252,7 +253,8 @@ def main(
             state['run_length'] = 1
 
         state['last_side'] = side
-        print(f'{state["run_length"]=}')
+        if verbose > 0:
+            print(f'{state["run_length"]=}')
 
         # send out as MIDI
         if send:
@@ -309,8 +311,9 @@ def main(
         # print(counts)
         player_count = sum(counts[i] for i in player_map.insts)
         noto_count = sum(counts[i] for i in noto_map.insts)
-        print(f'player: {player_count}')
-        print(f'noto: {noto_count}')
+        if verbose > 0:
+            print(f'player: {player_count}')
+            print(f'noto: {noto_count}')
         total_count = player_count + noto_count
 
         all_insts = noto_map.insts 
@@ -320,7 +323,8 @@ def main(
         steer_time = 1-controls.get('steer_rate', 0.5)
         tqt = (max(0,steer_time-0.5), min(1, steer_time+0.5))
 
-        print(tqt)
+        if verbose > 1:
+            print(tqt)
 
         # if using nominal time,
         # *subtract* estimated feed latency to min_time; (TODO: really should
@@ -346,7 +350,8 @@ def main(
         if len(insts)==0:
             insts = all_insts
 
-        print(f'{insts=}')
+        if verbose > 1:
+            print(f'{insts=}')
 
         # bal_insts = set(counts.index[counts <= counts.min()+n_margin])
         # if balance_sample and len(bal_insts)>0:
@@ -371,7 +376,8 @@ def main(
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
-        print(min_time, max_t)
+        if verbose > 1:
+            print(min_time, max_t)
 
         pending.event = query_method(
             include_pitch=pitch_set,
@@ -419,7 +425,8 @@ def main(
         #     print(f"{controls['steer_density']=}")
         if msg.control==3:
             controls['steer_rate'] = msg.value/127
-            print(f"{controls['steer_rate']=}")
+            if verbose > 0:
+                print(f"{controls['steer_rate']=}")
 
         if msg.control==4:
             noto_reset()

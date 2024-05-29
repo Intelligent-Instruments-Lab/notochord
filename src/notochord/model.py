@@ -1207,6 +1207,13 @@ class Notochord(nn.Module):
             path: file path to Notochord model
         """
         if path=="notochord-latest.ckpt":
+            url = 'https://github.com/Intelligent-Instruments-Lab/iil-python-tools/releases/download/notochord-v0.4.0/notochord_lakh_50G_deep.pt'
+        elif path=="txala-latest.ckpt":
+            url = 'https://github.com/Intelligent-Instruments-Lab/notochord/releases/download/notochord-v0.5.4/noto-txala-011-0020.ckpt'
+        else:
+            url = None
+
+        if url is not None:
             d = Notochord.user_data_dir()
             path = d / path
             # maybe download
@@ -1214,12 +1221,12 @@ class Notochord(nn.Module):
                 while True:
                     answer = input("Do you want to download a notochord model? (y/n)")
                     if answer.lower() in ["y","yes"]:
-                        download_url('https://github.com/Intelligent-Instruments-Lab/iil-python-tools/releases/download/notochord-v0.4.0/notochord_lakh_50G_deep.pt', path)
+                        download_url(url, path)
                         print(f'saved to {path}')
                         break
                     if answer.lower() in ["n","no"]:
                         break
-            # path = 
+        # path = 
         checkpoint = torch.load(path, map_location=torch.device('cpu'))
         model = cls(**checkpoint['kw']['model'])
         model.load_state_dict(checkpoint['model_state'], strict=False)

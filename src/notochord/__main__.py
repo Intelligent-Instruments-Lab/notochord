@@ -12,6 +12,7 @@ def help():
         homunculus: run the Notochord homunculus TUI
         harmonizer: run the Notochord harmonizer TUI
         improviser: run the Notochord improviser TUI
+        txalaparta: run the txalaparta app
         files: show the location of Notochord models and config files on disk
     """)
 
@@ -30,6 +31,9 @@ def _main():
         if sys.argv[1] == 'improviser':
             sys.argv = sys.argv[1:]
             run(improviser)
+        if sys.argv[1] == 'txalaparta':
+            sys.argv = sys.argv[1:]
+            run(txalaparta)
         if sys.argv[1] == 'files':
             d = Notochord.user_data_dir()
             print(d)
