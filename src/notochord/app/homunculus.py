@@ -100,7 +100,7 @@ def main(
     predict_follow=False,
     debug_query=False, # don't query notochord when there is no pending event.
     testing=False,
-    estimated_latency=1e-2,
+    estimated_latency=15e-3,
     soundfont=None,
     limit_input=None,
     thru_vel_offset=None,
@@ -486,7 +486,9 @@ def main(
         elif 'note_shift' in cfg:
             note = note + cfg['note_shift']
 
-        midi.send(kind, note=note, velocity=velocity, channel=channel-1)
+        port = cfg.get('port', None)
+
+        midi.send(kind, note=note, velocity=velocity, channel=channel-1, port=port)
 
     def play_event(
             event, channel, 
@@ -674,9 +676,10 @@ def main(
                 # query for the end of a note with flexible timing
                 # with profile('query', print=print, enable=profiler):
                 t = stopwatch.read()
+                mt = max(t, min(max_time, t+0.2))
                 pending.event = noto.query(
                     next_inst=inst, next_pitch=pitch,
-                    next_vel=0, min_time=t, max_time=t+0.5)
+                    next_vel=0, min_time=t, max_time=mt)
                 print(f'END STUCK NOTE {inst=},{pitch=}')
                 tui.defer(prediction=pending.event)
                 return
@@ -688,10 +691,20 @@ def main(
             counts[i] = c
         # print(f'{counts=}')
 
+        # if using nominal time,
+        # *subtract* estimated feed latency to min_time; (TODO: really should
+        #   set no min time when querying, use stopwatch when re-querying...)
+        # if using actual time, *add* estimated query latency
+        time_offset = -5e-3 if nominal_time else 10e-3
+        min_time = stopwatch.read()+time_offset
+
+        # if max_time < min_time, exclude input instruments
+        input_late = max_time is not None and max_time < min_time
+
         inst_modes = ['auto']
         if predict_follow:
             inst_modes.append('follow')
-        if predict_input:
+        if predict_input and not input_late:
             inst_modes.append('input')
         allowed_insts = mode_insts(inst_modes, allow_muted=False)
 
@@ -708,12 +721,8 @@ def main(
         tqt = (max(0,steer_time-0.5), min(1, steer_time+0.5))
         tqp = (max(0,steer_pitch-0.5), min(1, steer_pitch+0.5))
 
-        # if using nominal time,
-        # *subtract* estimated feed latency to min_time; (TODO: really should
-        #   set no min time when querying, use stopwatch when re-querying...)
-        # if using actual time, *add* estimated query latency
-        time_offset = -5e-3 if nominal_time else 10e-3
-        min_time = stopwatch.read()+time_offset
+
+
 
         # idea: maintain an 'instrument presence' quantity
         # incorporating time since / number of notes was playing
@@ -734,7 +743,7 @@ def main(
 
         # VTIP is better for time interventions,
         # VIPT is better for instrument interventions
-        if min_time > estimated_latency or abs(tqt) > abs(tqp):
+        if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
             query_method = noto.query_vtip
         else:
             query_method = noto.query_vipt
@@ -855,24 +864,28 @@ def main(
         """
         # convert from 0-index
         channel = msg.channel+1
+        cfg = config[channel]
 
         if channel not in mode_chans('input'):
             print(f'WARNING: ignoring MIDI {msg} on non-input channel')
             return
         
-        if config[channel]['mute']:
+        if cfg['mute']:
             print(f'WARNING: ignoring MIDI {msg} on muted channel')
             return
         
+        port = cfg.get('port', None)
         if thru:
             if msg.velocity>0 and msg.type=='note_on' and thru_vel_offset is not None:
                 vel = max(1, int(msg.velocity*thru_vel_offset))
-                midi.send(msg.type, note=msg.note, channel=msg.channel, velocity=vel)
+                midi.send(msg.type, note=msg.note, channel=msg.channel, velocity=vel, port=port)
             else:
-                midi.send(msg)
+                midi.send(msg, port=port)
 
         inst = channel_inst(channel)
         pitch = msg.note
+        if 'note_shift' in cfg:
+            pitch = pitch + cfg['note_shift']
         vel = msg.velocity if msg.type=='note_on' else 0
         
         dt = input_sw.punch()

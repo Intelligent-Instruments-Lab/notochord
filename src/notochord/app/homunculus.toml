@@ -70,21 +70,3 @@ channel.13 = {mode="auto", inst=118}
 channel.14 = {mode="auto", inst=119}
 channel.15 = {mode="auto", inst=120}
 channel.16 = {mode="auto", inst=48}
-
-
-# "rock": {
-#     "1":{"mode":"input", "inst":29},
-#     "3":{"mode":"auto", "inst":30, "mute":true},
-#     "4":{"mode":"auto", "inst":35},
-#     "5":{"mode":"auto", "inst":28, "mute":true},
-#     "6":{"mode":"auto", "inst":31, "mute":true},
-#     "7":{"mode":"auto", "inst":32, "mute":true},
-#     "10":{"mode":"auto", "inst":129}
-# },
-# "synths": {
-#     "1":{"mode":"input", "inst":85},
-#     "2":{"mode":"auto", "inst":84},
-#     "3":{"mode":"auto", "inst":91},
-#     "4":{"mode":"auto", "inst":119},
-#     "5":{"mode":"auto", "inst":99}
-# },
