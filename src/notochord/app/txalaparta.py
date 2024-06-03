@@ -65,7 +65,7 @@ def main(
     noto_config:Dict[int,int]=None, # map MIDI channel : GM instrument
     pitch_set=(41,43,45), # MIDI pitches used
     vel_range=(80,120),
-    scale_vel=False,
+    # scale_vel=False,
 
     initial_mute=False, # start with Notochord muted
     initial_query=False, # let Notochord start playing immediately
@@ -76,22 +76,22 @@ def main(
     send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
 
-    input_latency=0.02,
-    rhythm_temp=0.9,
-    timing_temp=0.2,
-    steer_rate=None,
+    input_latency=0.005,
+    rhythm_temp=0.5,
+    timing_temp=0.05,
+    steer_rate=0.55,
 
     auto_reset=True,
 
     start_after=2, # don't sample notochord until this many total events
     max_run=5,
     # balance_sample=True, # choose instruments which have played less recently
-    n_recent=16, # number of recent note-on events to consider for above
-    n_margin=5, # amount of 'slack' in the balance_sample calculation
+    # n_recent=16, # number of recent note-on events to consider for above
+    # n_margin=5, # amount of 'slack' in the balance_sample calculation
     
     max_time=None, # max time between events
     nominal_time=False, #feed Notochord with nominal dt instead of actual
-    backoff_time=1e-3, #time to wait when a predicted player event doesn't happen
+    backoff_time=50e-3, #time to wait when a predicted player event doesn't happen
 
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
