@@ -40,6 +40,9 @@ def categorical_sample(
         logits, whitelist=None, index=None, top_p=None, 
         truncate_quantile=None,
         ):
+    # if logits.isnan().any():
+    #     raise Exception('start '+str(logits))
+
     if whitelist is not None:
         preserve_logits = logits[...,whitelist]
         logits = torch.full_like(logits, -torch.inf)
@@ -49,8 +52,15 @@ def categorical_sample(
         return logits.argsort(-1, True)[..., index]
     
     probs = logits.softmax(-1)
+
+    # if probs.isnan().any():
+        # raise Exception('whitelist '+str(probs))
+    
     if top_p is not None:
         probs = reweight_top_p(probs, top_p)
+
+    # if probs.isnan().any():
+        # raise Exception('top p '+str(probs))
 
     if truncate_quantile is not None:
         q_lo, q_hi = truncate_quantile
@@ -64,6 +74,11 @@ def categorical_sample(
         probs -= (q_lo-zcs).clip(zero, probs)
         # truncate from q_hi
         probs -= (cs-q_hi).clip(zero, probs)
+
+    # if probs.isnan().any():
+        # raise Exception('trunc quant '+str(probs))
+
+    probs.nan_to_num_(1e-5)
 
     return D.Categorical(probs).sample()
 
@@ -177,7 +192,7 @@ class CensoredMixtureLogistic(nn.Module):
 
     def cdf_components(self, loc, s, x):
         x_ = (x[...,None] - loc) * s
-        return x_.sigmoid()        
+        return x_.sigmoid()       
 
     # TODO: 'discrete_sample' method which would re-quantize and then allow
     # e.g. nucleus sampling on the categorical distribution?
@@ -198,7 +213,8 @@ class CensoredMixtureLogistic(nn.Module):
                 ignoring sharpness.
             bias: applied outside of truncation but inside of clamping,
                 useful e.g. for latency correction when sampling delta-time
-            truncate_quantile: truncate the distribution 
+            truncate_quantile: truncate the distribution again by quantile,
+                after the effects of truncate, weight_top_p and component_temp.
             quantile_k: truncate_quantile is implemented by drawing this many
                 samples and sorting them  
         Returns:
@@ -237,6 +253,9 @@ class CensoredMixtureLogistic(nn.Module):
             # reweight with top_p
             probs = reweight_top_p(probs+eps, weight_top_p)
 
+        # if not probs.isfinite().all():
+            # print(f'{probs=}')
+
         ## DEBUG
         # print(loc)
         # print(s)
@@ -244,6 +263,7 @@ class CensoredMixtureLogistic(nn.Module):
         # print(probs)
         #, log_pi.exp(), trunc_probs)
         # print(probs+eps)
+        probs = probs.clamp(eps, 1)
         c = D.Categorical(probs).sample((shape,))
         # move sample dimension first
         loc = loc.movedim(-1, 0).gather(0, c)
@@ -255,8 +275,13 @@ class CensoredMixtureLogistic(nn.Module):
         # truncate
         u = u * (upper-lower) + lower
 
+        u = u.clamp(eps, 1-eps)
+
         # x = loc + scale * (u.log() - (1 - u).log())
         x = loc + bias - scale * (1/u - 1).log()
+
+        # if not x.isfinite().all():
+            # print(f'{x=} {u=}')
 
         if truncate_quantile is not None:
             x = x.sort(dim=0).values
@@ -268,6 +293,7 @@ class CensoredMixtureLogistic(nn.Module):
             x = x[idx]
             
         x = x.clamp(self.lo, self.hi)
+        x = x.clamp(*truncate)
         return x[0] if unwrap else x
 
 

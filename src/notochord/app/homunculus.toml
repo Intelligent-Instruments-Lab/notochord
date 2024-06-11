@@ -1,3 +1,62 @@
+[[control]]
+name = 'steer_pitch'
+control_change = [1, 74]
+value = 0.5
+range = [0, 1]
+
+[[control]]
+name = 'steer_density'
+control_change = [2, 75]
+value = 0.5
+range = [0, 1]
+
+[[control]]
+name = 'steer_rate'
+control_change = [3, 76]
+value = 0.5
+range = [0, 1]
+
+[[control]]
+name = 'timing_temp'
+control_change = [78]
+value = 0.2
+range = [0, 1]
+
+[[control]]
+name = 'rhythm_temp'
+control_change = [79]
+value = 0.9
+range = [0, 1]
+
+[[action]]
+name = 'reset'
+control_change = [4, 77]
+
+[[action]]
+name = 'query'
+
+[[action]]
+name = 'mute'
+
+[[preset]]
+name = "demo"
+channel.1 = {mode="input", inst=1, mute=false}
+channel.2 = {mode="auto", inst=113, mute=false}
+channel.3 = {mode="auto", inst=114, mute=false}
+channel.4 = {mode="auto", inst=12}
+channel.5 = {mode="auto", inst=29}
+channel.6 = {mode="auto", inst=35}
+channel.7 = {mode="auto", inst=19}
+channel.8 = {mode="auto", inst=74}
+channel.9 = {mode="auto", inst=89}
+channel.10 = {mode="input", inst=161, mute=false}
+channel.11 = {mode="auto", inst=97}
+channel.12 = {mode="auto", inst=109}
+channel.13 = {mode="auto", inst=14}
+channel.14 = {mode="auto", inst=69}
+channel.15 = {mode="auto", inst=82}
+channel.16 = {mode="auto", inst=40}
+
 [[preset]]
 name = "ens1"
 channel.1 = {mode="auto", inst=29, mute=false}

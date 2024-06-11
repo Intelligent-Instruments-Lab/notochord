@@ -105,6 +105,7 @@ def main(
     limit_input=None,
     thru_vel_offset=None,
     profiler=0,
+    wipe_presets=False,
     ):
     """
     This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. It allows combining both 'harmonizer' and 'improviser' features.
@@ -236,6 +237,10 @@ def main(
             generally should be True for manual input;
             use balance_sample to force 'auto' voices to play. 
             you might want it False if you have a very busy input.
+
+        wipe_presets:
+            if True, replaces your homunulus.toml with the defaults
+            (may be useful after updating notochord)
     """
     if osc_port is not None:
         osc = OSC(osc_host, osc_port)
@@ -285,18 +290,28 @@ def main(
     cfg_dir = Notochord.user_data_dir()
     default_preset_file = cfg_dir / 'homunculus.toml'
     src_preset_file = Path(__file__).parent / 'homunculus.toml'
-    if not default_preset_file.exists():
+    if wipe_presets or not default_preset_file.exists():
         shutil.copy(src_preset_file, default_preset_file)
 
     ### presets and config
-    try:
+    try:    
         if preset_file is None:
-            presets = toml_file.Config(str(default_preset_file))['preset']
+            global_config = toml_file.Config(str(default_preset_file))
         else:
-            presets = toml_file.Config(str(preset_file))['preset']
+            global_config = toml_file.Config(str(preset_file))
+        presets = global_config.get('preset', {})
+        control_meta = global_config.get('control', {})
+        action_meta = global_config.get('action', {})
+
     except Exception:
-        print('WARNING: failed to load presets file')
+        print('WARNING: failed to load presets from file')
+        global_config = {}
         presets = {}
+        control_meta = []
+        action_meta = []
+
+    # store control values
+    controls = {ctrl['name']:ctrl.get('value', None) for ctrl in control_meta}
 
     # defaults
     def default_config_channel(i):
@@ -305,8 +320,9 @@ def main(
     # convert MIDI channels to int
     # print(presets)
     for p in presets:
-        p['channel'] = {int(k):{**default_config_channel(i), **v} for i,(k,v) in enumerate(p['channel'].items(),1)}
-    # presets = {p:{int(k):v for k,v in d.items()} for p,d in presets.items()}
+        p['channel'] = {
+            int(k):{**default_config_channel(i), **v} 
+            for i,(k,v) in enumerate(p['channel'].items(),1)}
 
     # TODO: config from CLI > config from preset file > channel defaults
     #       warn if preset is overridden by config
@@ -323,7 +339,7 @@ def main(
                     print('WARNING: `--config` overrides `--preset`')
                 break
     elif len(presets):
-        config_file = presets[0]['channel']
+        config_file = {**presets[0]['channel']}
         # preset = list(presets)[0]
 
     config_cli = {} if config is None else config
@@ -386,14 +402,7 @@ def main(
             k for k,v in config.items() 
             if v['mode']=='follow' 
             and v.get('source', None)==chan]
-    
-    # if len(mode_insts('input') & mode_insts('auto')):
-    #     print("WARNING: auto and input instruments shouldn't overlap")
-    #     print('setting to an anonymous instrument')
-    #     # TODO: set to anon insts without changing mel/drum
-    #     # respecting anon insts selected for player
-    #     raise NotImplementedError
-    
+      
     # load notochord model
     try:
         noto = Notochord.from_checkpoint(checkpoint)
@@ -404,13 +413,6 @@ def main(
     except Exception:
         print("""error loading notochord model""")
         raise
-
-    # def warn_inst(i):
-    #     if i > 128:
-    #         if i < 257:
-    #             print(f"WARNING: drum instrument {i} selected, be sure to select a drum bank in your synthesizer")
-    #         else:
-    #             print(f"WARNING: instrument {i} is not General MIDI")
 
     def dedup_inst(c, i):
         # change to anon if already in use
@@ -452,10 +454,7 @@ def main(
         def __init__(self):
             self.event = None
             self.gate = not initial_mute
-    pending = Prediction()
-
-    # query parameters controlled via MIDI / OSC
-    controls = {}
+    pending = Prediction()    
 
     # tracks held notes, recently played instruments, etc
     history = NotoPerformance()
@@ -507,9 +506,6 @@ def main(
         if send:
             with profile('\tmidi.send', print=print, enable=profiler>1):
                 send_midi(event['pitch'], vel, channel)
-                # midi.send(
-                #     'note_on' if vel > 0 else 'note_off', 
-                #     note=event['pitch'], velocity=vel, channel=channel-1)
 
         # print
         with profile('\tdisplay_event', print=print, enable=profiler>1):
@@ -556,7 +552,6 @@ def main(
                 min_x, max_x = cfg.get('transpose', (-128,128))
                 lo, hi = cfg.get('range', (0,127))
 
-                # already_playing = {p for i,p in history.note_pairs if noto_inst==i}
                 already_playing = {
                     note.pitch for note in history.notes if noto_inst==note.inst}
                 # print(f'{already_playing=}')
@@ -644,8 +639,9 @@ def main(
             print('UNMUTE' if pending.gate else 'MUTE')
         # if unmuting, we're done
         if pending.gate:
-            if sustain:
-                auto_query()
+            auto_query()
+            # if sustain:
+                # auto_query()
             return
         # cancel pending predictions
         pending.event = None
@@ -717,15 +713,15 @@ def main(
         steer_time = 1-controls.get('steer_rate', 0.5)
         steer_pitch = controls.get('steer_pitch', 0.5)
         steer_density = controls.get('steer_density', 0.5)
+
+        rhythm_temp = controls.get('rhythm_temp', 1)
+        timing_temp = controls.get('timing_temp', 1)
         
         tqt = (max(0,steer_time-0.5), min(1, steer_time+0.5))
         tqp = (max(0,steer_pitch-0.5), min(1, steer_pitch+0.5))
 
-
-
-
         # idea: maintain an 'instrument presence' quantity
-        # incorporating time since / number of notes was playing
+        # incorporating time since / number of notes playing
         # ideally this would distinguish sustained from percussive instruments too
         
         # balance_sample: note-ons only from instruments which have played less
@@ -744,8 +740,10 @@ def main(
         # VTIP is better for time interventions,
         # VIPT is better for instrument interventions
         if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
+            # print('VTIP')
             query_method = noto.query_vtip
         else:
+            # print('VIPT')
             query_method = noto.query_vipt
 
         # print(f'considering {insts} for note_on')
@@ -772,13 +770,18 @@ def main(
                     min_time=min_time, max_time=max_t,
                     truncate_quantile_time=tqt,
                     truncate_quantile_pitch=tqp,
+                    rhythm_temp=rhythm_temp,
+                    timing_temp=timing_temp,
                     steer_density=steer_density,
                     inst_weights=inst_weights,
                     no_steer=mode_insts(('input','follow'), allow_muted=False),
                 )
-        except Exception:
-            # print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
+        except Exception as e:
+            print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
+            print(e.args)
+            print(repr(e.__traceback__))
             pending.event = None
+
 
         # display the predicted event
         tui.defer(prediction=pending.event)
@@ -807,6 +810,37 @@ def main(
         # print(controls)
 
     # very basic CC handling for controls
+    control_cc = {}
+    control_osc = {}
+    for ctrl in control_meta:
+        name = ctrl['name']
+        ccs = ctrl.get('control_change', [])
+        if isinstance(ccs, Number) or isinstance(ccs, str):
+            ccs = (ccs,)
+        for cc in ccs:
+            control_cc[cc] = ctrl
+        control_osc[f'/notochord/homunculus/{name}'] = ctrl
+    action_cc = {}
+    action_osc = {}
+    for act in action_meta:
+        name = act['name']
+        ccs = act.get('control_change', [])
+        if isinstance(ccs, Number) or isinstance(ccs, str):
+            ccs = (ccs,)
+        for cc in ccs:
+            action_cc[cc] = act
+        action_osc[f'/notochord/homunculus/{name}'] = act
+
+    def dispatch_action(k):   
+        if k=='reset':
+            noto_reset()
+        elif k=='query':
+            auto_query()
+        elif k=='mute':
+            noto_mute()
+        else:
+            print(f'WARNING: action "{k}" not recognized')
+
     @midi.handle(type='control_change')
     def _(msg):
         """
@@ -816,41 +850,34 @@ def main(
         CC 03: steer rate (>64 more events, <64 fewer)
         """
 
-        if msg.control==1:
-            controls['steer_pitch'] = msg.value/127
-            print(f"{controls['steer_pitch']=}")
-        if msg.control==2:
-            controls['steer_density'] = msg.value/127
-            print(f"{controls['steer_density']=}")
-        if msg.control==3:
-            controls['steer_rate'] = msg.value/127
-            print(f"{controls['steer_rate']=}")
+        if msg.control in control_cc:
+            ctrl = control_cc[msg.control]
+            name = ctrl['name']
+            lo, hi = ctrl.get('range', (0,1))
+            controls[name] = msg.value/127 * (hi-lo) + lo
+            print(f"{name}={controls[name]}")
 
-        if msg.control==4:
-            noto_reset()
-        if msg.control==5:
-            auto_query()
-        if msg.control==6:
-            noto_mute()
+        if msg.control in action_cc:
+            k = action_cc[msg.control]['name']
+            dispatch_action(k)
 
-    # very basic OSC handling for controls
     if osc_port is not None:
-        @osc.args('/notochord/homunculus/*')
+        @osc.handle('/notochord/homunculus/*')
         def _(route, *a):
-            print('OSC:', route, *a)
-            ctrl = route.split['/'][3]
-            if ctrl=='reset':
-                noto_reset()
-            elif ctrl=='query':
-                auto_query()
-            elif ctrl=='mute':
-                noto_mute()
-            else:
-                assert len(a)==0
+            # print('OSC:', route, *a)
+            if route in control_osc:
+                ctrl = control_osc[route]
+                name = ctrl['name']
+                assert len(a)==1
                 arg = a[0]
                 assert isinstance(arg, Number)
-                controls[ctrl] = arg
-                print(controls)
+                lo, hi = ctrl.get('range', (0,1))   
+                controls[name] = min(hi, max(0, arg))
+                print(f"{name}={controls[name]}")
+
+            if route in action_osc:
+                k = action_osc[route]['name']
+                dispatch_action(k)
 
     input_sw = Stopwatch()
     dropped = set()# (channel, pitch)
@@ -934,16 +961,55 @@ def main(
         
         play_event(event, channel=chan, tag='NOTO')
 
+    def get_dt():
+        return (pending.event['time'] 
+                if pending.event is not None 
+                else float('inf'))
+    # TODO: this is making the TUI sluggish when tick > interval
+    # guessing the GIL prevents UI thread from running if the repeat thread
+    # is always spinning
+    # then the UI only gets to run when the repeat thread goes into torch code
+    # so if there's nothing for torch to do, but it's still checking every ms,
+    # and tick is 5ms, it is spinning the whole time
+    # is there a way to spin lock but release GIL...?
+    # does that make sense?
+    # alternatively, could return a larger interval here as appropriate
+    # BUT that might break things if query is called from outside here...
+    # could compromise tho, and return something like 10ms
+    # causing queries from outside repeat to have mild jitter,
+    # while spinning still happens 
+    # @repeat(1e-3, lock=True, tick=None)
+    # def _():
+    #     """Loop, checking if predicted next event happens"""
+    #     # check if current prediction has passed
+    #     # print(dt, stopwatch.read())
+    #     while (
+    #     # if (
+    #         follow_status['depth']==0 and
+    #         not testing and
+    #         pending.gate and
+    #         stopwatch.read() > get_dt()
+    #         ):
+    #         # if so, check if it is a notochord-controlled instrument
+    #         if pending.event['inst'] in mode_insts('auto'):
+    #             # prediction happens
+    #             with profile('auto_event', print=print, enable=profiler):
+    #                 auto_event()
+    #         # query for new prediction
+    #         if get_dt() < noto.max_dt and not debug_query:
+    #         # if not debug_query:
+    #             with profile('auto_query', print=print, enable=profiler):
+    #                 auto_query()
     @repeat(1e-3, lock=True)
     def _():
         """Loop, checking if predicted next event happens"""
         # check if current prediction has passed
-        dt = pending.event['time'] if pending.event is not None else float('inf')
+        # print(get_dt(), stopwatch.read())
         if (
             follow_status['depth']==0 and
             not testing and
             pending.gate and
-            stopwatch.read() > dt
+            stopwatch.read() > get_dt()
             ):
             # if so, check if it is a notochord-controlled instrument
             if pending.event['inst'] in mode_insts('auto'):
@@ -951,18 +1017,20 @@ def main(
                 with profile('auto_event', print=print, enable=profiler):
                     auto_event()
             # query for new prediction
-            if dt < noto.max_dt and not debug_query:
-            # if not debug_query:
+            # if get_dt() < noto.max_dt and not debug_query:
+            if not debug_query:
                 with profile('auto_query', print=print, enable=profiler):
                     auto_query()
+        # adaptive time resolution here -- yield to other threads when 
+        # next event is not expected, but time precisely when next event
+        # is imminent
+        return max(0, min(10e-3, get_dt() - stopwatch.read()))
 
     @cleanup
     def _():
         """end any remaining notes"""
         # print(f'cleanup: {notes=}')
-        # for (chan,inst,pitch) in history.note_triples:
         for note in history.notes:
-        # for (inst,pitch) in notes:
             if note.inst in mode_insts(('auto', 'follow')):
                 midi.note_off(note=note.pitch, velocity=0, channel=note.chan-1)
                 # midi.note_on(note=note.pitch, velocity=0, channel=note.chan-1)
@@ -1032,56 +1100,6 @@ def main(
         if update:
             update_config()
 
-    class Instrument(Button):
-        """button which picks an instrument"""
-        def __init__(self, c, i):
-            super().__init__(inst_label(i))
-            self.channel = c
-            self.inst = i
-        def on_button_pressed(self, event: Button.Pressed):
-            self.app.pop_screen()
-            self.app.pop_screen()
-            set_inst(self.channel, self.inst)
-
-    class InstrumentGroup(Button):
-        """button which picks an instrument group"""
-        def __init__(self, text, c, g):
-            super().__init__(text)
-            self.channel = c
-            self.group = g
-        def on_button_pressed(self, event: Button.Pressed):
-            # show inst buttons
-            tui.push_screen(InstrumentSelect(self.channel, self.group))
-
-    class InstrumentSelect(ModalScreen):
-        """Screen with instruments"""
-        def __init__(self, c, g):
-            super().__init__()
-            self.channel = c
-            self.group = g
-
-        def compose(self):
-            yield Grid(
-                *(
-                    Instrument(self.channel, i)
-                    for i in gm_groups[self.group][1]
-                ), id="dialog",
-            )
-
-    class InstrumentGroupSelect(ModalScreen):
-        """Screen with instrument groups"""
-        # TODO: add other features to this screen -- transpose, range, etc?
-        def __init__(self, c):
-            super().__init__()
-            self.channel = c
-
-        def compose(self):
-            yield Grid(
-                *(
-                    InstrumentGroup(s, self.channel, g)
-                    for g,(s,_) in enumerate(gm_groups)
-                ), id="dialog",
-            )
 
     def set_inst(c, i, update=True):
         print(f'SET INSTRUMENT {i}')
@@ -1204,6 +1222,59 @@ def main(
     def query():
         auto_query()
 
+    ### TUI classes which close over variables defined in main
+
+    class Instrument(Button):
+        """button which picks an instrument"""
+        def __init__(self, c, i):
+            super().__init__(inst_label(i))
+            self.channel = c
+            self.inst = i
+        def on_button_pressed(self, event: Button.Pressed):
+            self.app.pop_screen()
+            self.app.pop_screen()
+            set_inst(self.channel, self.inst)
+
+    class InstrumentGroup(Button):
+        """button which picks an instrument group"""
+        def __init__(self, text, c, g):
+            super().__init__(text)
+            self.channel = c
+            self.group = g
+        def on_button_pressed(self, event: Button.Pressed):
+            # show inst buttons
+            tui.push_screen(InstrumentSelect(self.channel, self.group))
+
+    class InstrumentSelect(ModalScreen):
+        """Screen with instruments"""
+        def __init__(self, c, g):
+            super().__init__()
+            self.channel = c
+            self.group = g
+
+        def compose(self):
+            yield Grid(
+                *(
+                    Instrument(self.channel, i)
+                    for i in gm_groups[self.group][1]
+                ), id="dialog",
+            )
+
+    class InstrumentGroupSelect(ModalScreen):
+        """Screen with instrument groups"""
+        # TODO: add other features to this screen -- transpose, range, etc?
+        def __init__(self, c):
+            super().__init__()
+            self.channel = c
+
+        def compose(self):
+            yield Grid(
+                *(
+                    InstrumentGroup(s, self.channel, g)
+                    for g,(s,_) in enumerate(gm_groups)
+                ), id="dialog",
+            )
+
     if initial_query:
         auto_query(predict_input=False, predict_follow=False)
 
@@ -1292,7 +1363,7 @@ class NotoControl(Static):
         yield Button("Mute", id="mute", variant="error")
         yield Button("Sustain", id="sustain", variant="primary")
         yield Button("Query", id="query")
-        yield Button("Reset", id="reset", variant='warning')
+        yield Button("Reset", id="reset", variant="warning")
 
     def on_mount(self) -> None:
         self.query_one("#mute").tooltip = "master mute notochord"
@@ -1309,8 +1380,6 @@ class NotoTUI(TUI):
         ("q", "query", "Re-query Notochord"),
         ("r", "reset", "Reset Notochord")]
     
-
-
     def compose(self):
         """Create child widgets for the app."""
         yield Header()
@@ -1324,7 +1393,7 @@ class NotoTUI(TUI):
 
     def on_mount(self) -> None:
         self.query_one(NotoPrediction).tooltip = "displays the next predicted event"
-        print(self.screen)
+        # print(self.screen)
 
     def set_preset(self, idx, name):
         node = self.query_one('#'+preset_id(idx))

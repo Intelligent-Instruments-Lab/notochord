@@ -77,7 +77,7 @@ def main(
     dump_midi=False, # print all incoming MIDI
 
     input_latency=0.005,
-    rhythm_temp=0.5,
+    rhythm_temp=0.9,
     timing_temp=0.05,
     steer_rate=0.55,
 

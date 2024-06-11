@@ -447,6 +447,7 @@ class Notochord(nn.Module):
         with torch.inference_mode():
             #
             if sq is None or isinstance(sq, str) or isinstance(sq, Query):
+                # print(f'{m=} (simple)')
                 # this is the final query (sq is None or a path tag)
                 # or there are no cases, just proceed to next subquery
                 action = sq
@@ -462,11 +463,14 @@ class Notochord(nn.Module):
             #     key, action = sq[0]
             #     result = key
             elif len(sq)==2 and isinstance(sq[0], Number):
+                # print(f'{m=} ({key=})')
                 # bare pair case
                 key, action = sq
                 result = key
 
             elif m in ('inst', 'pitch'):
+                # print(f'{m=}')
+
                 # weighted subsets case
                 try:
                     assert all(isinstance(s, Subset) for s,_ in sq)
@@ -475,7 +479,13 @@ class Notochord(nn.Module):
                     subqueries should all be Subset, Query tuples here: {sq}
                     """)
 
+                # if (~hidden.isfinite()).any():
+                #     raise Exception('hidden '+str(hidden))
+                
                 params = project(hidden.tanh())
+
+                # if (~params.isfinite()).any():
+                    # raise Exception('params '+str(params))
 
                  # sample subset
                 if len(sq) > 1:
@@ -483,6 +493,10 @@ class Notochord(nn.Module):
                     probs = [
                         all_probs[...,s.values].sum(-1) * s.weight
                         for s,_ in sq]
+                    
+                    # if (~torch.tensor(probs).log().isfinite()).any():
+                        # raise Exception('subset '+str(probs))
+                    
                     # print(f'deep_query {m} {sq=} {probs=}')
                     idx = categorical_sample(torch.tensor(probs).log())
                 else:
@@ -492,6 +506,7 @@ class Notochord(nn.Module):
                 result = sample(params, whitelist=s.values, **query.kw)
 
             elif m in ('time', 'vel'):
+                # print(f'{m=}')
                 # weighted ranges case
                 assert all(isinstance(r, Range) for r,_ in sq)
 
@@ -510,15 +525,22 @@ class Notochord(nn.Module):
                 # sample from range
                 result = sample(params, truncate=(r.lo, r.hi), **query.kw)
 
+            if not result.isfinite().all():
+                print('WARNING: nonfinite value {result=} {m=}')
+                result.nan_to_num_(0)
+
             try:
                 event[m] = result.item()
             except Exception:
                 event[m] = result
 
+            # print(f'{result=}')
             # embed, add to hidden, recurse into subquery
             if isinstance(action, Query):
                 emb = embed(result)
                 hidden = hidden + emb
+                if (~hidden.isfinite()).any():
+                    raise Exception(f'{m=} {result=} {emb=}')
                 return self._deep_query(action, hidden, event)
             else:
                 event['path'] = action
@@ -595,6 +617,7 @@ class Notochord(nn.Module):
             note_on_map:Dict[int,List[int]], 
             note_off_map:Dict[int,List[int]], 
             min_time=None, max_time=None, 
+            rhythm_temp=None, timing_temp=None,
             truncate_quantile_time=None,
             truncate_quantile_pitch=None,
             steer_density=None, # truncate_quantile_type ? 
@@ -609,7 +632,6 @@ class Notochord(nn.Module):
                 note_on_map: possible note-ons as {instrument: [pitch]} 
                 note_off_map: possible note-offs as {instrument: [pitch]} 
         """
- 
         no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
         if no_on and no_off:
@@ -619,7 +641,10 @@ class Notochord(nn.Module):
         def get_subquery(ipm, path, weights=None):
             return Query(
                 'time',
-                Query(
+                truncate=(min_time or -torch.inf, max_time or torch.inf),
+                truncate_quantile=truncate_quantile_time,
+                weight_top_p=rhythm_temp, component_temp=timing_temp,
+                then=Query(
                     'inst', [(
                         Subset([i], 1 if weights is None else weights[i]), 
                         Query('pitch', path, 
@@ -627,7 +652,6 @@ class Notochord(nn.Module):
                             truncate_quantile=None if self.is_drum(i) else truncate_quantile_pitch)
                     ) for i,ps in ipm.items() if len(ps)]
                 ),
-                truncate=(min_time or -torch.inf, max_time or torch.inf), truncate_quantile=truncate_quantile_time
             )
         w = 1 if steer_density is None else 2**(steer_density*2-1)
         
@@ -642,6 +666,7 @@ class Notochord(nn.Module):
     def query_vipt(self,
         note_on_map, note_off_map,
         min_time=None, max_time=None, 
+        rhythm_temp=None, timing_temp=None,
         truncate_quantile_time=None,
         truncate_quantile_pitch=None,
         steer_density=None,
@@ -657,7 +682,6 @@ class Notochord(nn.Module):
                 note_on_map: possible note-ons as {instrument: [pitch]} 
                 note_off_map: possible note-offs as {instrument: [pitch]} 
         """
-
         no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
         if no_on and no_off:
@@ -673,7 +697,9 @@ class Notochord(nn.Module):
                     truncate_quantile=None if self.is_drum(i) else truncate_quantile_pitch,
                     then=Query(
                         'time', path,         
-                        truncate=(min_time or -torch.inf, max_time or torch.inf), truncate_quantile=None if (no_steer is not None and i in no_steer) else truncate_quantile_time
+                        truncate=(min_time or -torch.inf, max_time or torch.inf), 
+                        truncate_quantile=None if (no_steer is not None and i in no_steer) else truncate_quantile_time,
+                        weight_top_p=rhythm_temp, component_temp=timing_temp
                     )
                 )) for i,ps in note_map.items() if len(ps)]
             )
@@ -984,7 +1010,7 @@ class Notochord(nn.Module):
             if sweep_time:
                 if min_time is not None or max_time is not None:
                     raise NotImplementedError("""
-                    trunc_time with sweep_time needs implementation
+                    min_time/max_time with sweep_time needs implementation
                     """)
                 assert x.shape[0]==1, "batch size should be 1 here"
                 log_pi, loc, s = self.time_dist.get_params(x)
