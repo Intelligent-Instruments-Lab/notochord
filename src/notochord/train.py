@@ -13,7 +13,7 @@ from tqdm import tqdm
 import fire
 
 import numpy as np
-import scipy.stats
+# import scipy.stats
 
 import torch
 from torch.utils.data import DataLoader, RandomSampler
@@ -48,9 +48,10 @@ class Trainer:
         txala_permute = False,
         min_valid = 8,
         min_test = 8,
-        aug_speed=0.1,
-        aug_transpose=5,
-        aug_remap=True
+        aug_speed = 0.1,
+        aug_transpose = 5,
+        aug_remap = True,
+        freeze_rnn = False,
         ):
         """TODO: Trainer __init__ docstring"""
         kw = locals(); kw.pop('self')
@@ -96,6 +97,11 @@ class Trainer:
         # construct model from arguments 
         self.model = model_cls(**model).to(self.device)
         tqdm.write(repr(self.model))
+
+        if freeze_rnn:
+            for n,p in self.model.rnn.named_parameters():
+                print(f'freezing {n}')
+                p.requires_grad_(False)
 
         # dataset
         if txala:
