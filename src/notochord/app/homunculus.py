@@ -83,6 +83,7 @@ def main(
     thru=False, # copy player input to output
     send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
+    suppress_midi_feedback=True,
 
     balance_sample=False, # choose instruments which have played less recently
     n_recent=32, # number of recent note-on events to consider for above
@@ -244,7 +245,7 @@ def main(
     """
     if osc_port is not None:
         osc = OSC(osc_host, osc_port)
-    midi = MIDI(midi_in, midi_out)
+    midi = MIDI(midi_in, midi_out, suppress_feedback=suppress_midi_feedback)
 
     if soundfont is not None:
         # attempt to get instrument ranges from the soundfont
