@@ -24,7 +24,7 @@ def _main():
             run(server)
         if sys.argv[1] == 'homunculus':
             sys.argv = sys.argv[1:]
-            run(homunculus)
+            run(homunculus) 
         if sys.argv[1] == 'harmonizer':
             sys.argv = sys.argv[1:]
             run(harmonizer)
@@ -37,8 +37,10 @@ def _main():
         if sys.argv[1] == 'files':
             d = Notochord.user_data_dir()
             print(d)
-            # os.system(f"open '{d}'")
-            subprocess.run(('open', d))
+            if sys.platform=='darwin':
+               subprocess.run(('open', d))
+            elif sys.platform=='win32':
+                os.startfile(d)
         else:
             help()
     except IndexError:

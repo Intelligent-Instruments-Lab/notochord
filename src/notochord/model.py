@@ -251,7 +251,7 @@ class Notochord(nn.Module):
             for t in self.initial_state)
         h, _ = self.rnn(x, initial_state) #batch, time, hidden_size
 
-        # fit all note factorizations 
+        # fit all event factorizations 
         # e.g. inst->pitch->time->vel vs vel->time->inst->pitch
         trim_h = h[:,:-1]
         # always include hidden state, never include same modality,
