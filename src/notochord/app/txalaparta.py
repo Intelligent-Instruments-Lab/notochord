@@ -85,10 +85,9 @@ def main(
 
     start_after=2, # don't sample notochord until this many total events
     max_run=5,
-    # balance_sample=True, # choose instruments which have played less recently
-    # n_recent=16, # number of recent note-on events to consider for above
-    # n_margin=5, # amount of 'slack' in the balance_sample calculation
+    min_run=1,
     
+    min_time=0,
     max_time=None, # max time between events
     nominal_time=False, #feed Notochord with nominal dt instead of actual
     backoff_time=50e-3, #time to wait when a predicted player event doesn't happen
@@ -162,6 +161,21 @@ def main(
     print = tui.print
     ###
 
+    if isinstance(max_run, Number):
+        max_run = {'p1':max_run, 'p2':max_run}
+    if isinstance(min_run, Number):
+        min_run = {'p1':min_run, 'p2':min_run}
+
+    max_run[None] = 99
+    min_run[None] = 0
+
+    if isinstance(max_time, Number) or max_time is None:
+        max_time = {'p1':max_time, 'p2':max_time}
+    if isinstance(min_time, Number) or min_time is None:
+        min_time = {'p1':min_time, 'p2':min_time}
+    max_time[None] = None
+    min_time[None] = 0
+
     # default channel:instrument mappings
     if player_config is None:
         # player_config = {1:265,2:266}
@@ -175,6 +189,22 @@ def main(
         'total_count': 0,
         'last_side': None
     }
+
+    # assuming 2 player 2 notochord or else 4 notochord
+    if len(player_config)==2:
+        p1_insts = set(player_config.values())
+        p2_insts = set(noto_config.values())
+    elif len(noto_config)==4:
+        # if all notochord, ass
+        insts = sorted(noto_config.values())
+        p1_insts = set(insts[:2])
+        p2_insts = set(insts[2:])
+    else:
+        raise ValueError("""
+            invalid config.
+            there should be two player and two notochord hands, 
+            or four notochord hands.
+        """)
 
     # convert 1-indexed MIDI channels to 0-indexed here
     player_map = MIDIConfig({k-1:v for k,v in player_config.items()})
@@ -247,7 +277,8 @@ def main(
         if 'time' not in event or not nominal_time:
             event['time'] = dt
 
-        side = 'player' if event['inst'] in player_config.values() else 'noto'
+        # side = 'player' if event['inst'] in player_config.values() else 'noto'
+        side = 'p1' if event['inst'] in p1_insts else 'p2'
         if side==state['last_side']:
             state['run_length'] += 1
         else:
@@ -318,24 +349,29 @@ def main(
         if verbose > 1:
             print(tqt)
 
+        last_side = state['last_side']
         # if using nominal time,
         # *subtract* estimated feed latency to min_time; (TODO: really should
         #   set no min time when querying, use stopwatch when re-querying...)
         # if using actual time, *add* estimated query latency
         time_offset = -5e-3 if nominal_time else 10e-3
-        min_time = stopwatch.read()+time_offset+delay
+        min_t = max(min_time[last_side], stopwatch.read()+time_offset+delay)
+
 
         # print(state)
         if state['total_count'] < start_after or not predict_noto:
             insts = player_map.insts
         else:
             insts = all_insts
-            if state['run_length'] >= max_run:
-                if state['last_side']=='noto':
-                    s = set(noto_config.values()) 
-                else:
-                    s = set(player_config.values()) 
-                insts = insts - s
+            last_side_insts = p1_insts if last_side=='p1' else p2_insts
+            if state['run_length'] >= max_run[last_side]:
+                # if state['last_side']=='noto':
+                    # s = set(noto_config.values()) 
+                # else:
+                    # s = set(player_config.values()) 
+                insts = insts - last_side_insts
+            elif state['run_length'] < min_run[last_side]:
+                insts = last_side_insts
 
 
         if len(insts)==0:
@@ -358,7 +394,8 @@ def main(
             # 'stronger' than the time constraint
             query_method = noto.query_itpv_onsets
 
-        max_t = None if max_time is None else max(max_time, min_time+0.2)
+        max_t = max_time[last_side]
+        max_t = None if max_t is None else max(max_t, min_t+0.03)
 
         if verbose > 1:
             print(f'{min_time=}, {max_t=}')
@@ -366,7 +403,7 @@ def main(
         pending.event = query_method(
             include_pitch=pitch_set,
             include_inst=list(insts),
-            min_time=min_time, max_time=max_t,
+            min_time=min_t, max_time=max_t,
             truncate_quantile_time=tqt,
             min_vel=vel_range[0], max_vel=vel_range[1],
             rhythm_temp=rhythm_temp,
@@ -457,7 +494,7 @@ def main(
             # with profile('feed', print=print):
             play_event(
                 {'inst':inst, 'pitch':pitch, 'vel':vel}, 
-                channel=msg.channel, send=thru, tag='PLAYER')
+                channel=msg.channel, send=thru, tag='PLAYER (p1)')
 
             # query for new prediction
             noto_query()
@@ -477,7 +514,8 @@ def main(
         #     return
         
         chan = noto_map.inv(inst)
-        play_event(event, channel=chan, tag='NOTO')
+        p = 'p1' if inst in p1_insts else 'p2'
+        play_event(event, channel=chan, tag=f'NOTO ({p})')
 
     @repeat(1e-3, lock=True)
     def _():
