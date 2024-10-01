@@ -84,6 +84,7 @@ def main(
     send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
     suppress_midi_feedback=True,
+    input_channel_map=None,
 
     balance_sample=False, # choose instruments which have played less recently
     n_recent=32, # number of recent note-on events to consider for above
@@ -246,6 +247,8 @@ def main(
     if osc_port is not None:
         osc = OSC(osc_host, osc_port)
     midi = MIDI(midi_in, midi_out, suppress_feedback=suppress_midi_feedback)
+
+    if input_channel_map is None: input_channel_map = {}
 
     if soundfont is not None:
         # attempt to get instrument ranges from the soundfont
@@ -890,8 +893,9 @@ def main(
         e.g. a channel displaying -->01 will listen to note events on channel 1
         a channel displaying 02->03 will follow note events on channel 2
         """
+        channel = msg.channel + 1
         # convert from 0-index
-        channel = msg.channel+1
+        channel = input_channel_map.get(channel, channel)
         cfg = config[channel]
 
         if channel not in mode_chans('input'):
@@ -902,13 +906,13 @@ def main(
             print(f'WARNING: ignoring MIDI {msg} on muted channel')
             return
         
-        port = cfg.get('port', None)
-        if thru:
-            if msg.velocity>0 and msg.type=='note_on' and thru_vel_offset is not None:
-                vel = max(1, int(msg.velocity*thru_vel_offset))
-                midi.send(msg.type, note=msg.note, channel=msg.channel, velocity=vel, port=port)
-            else:
-                midi.send(msg, port=port)
+        # port = cfg.get('port', None)
+        # if thru:
+        #     if msg.velocity>0 and msg.type=='note_on' and thru_vel_offset is not None:
+        #         vel = max(1, int(msg.velocity*thru_vel_offset))
+        #         midi.send(msg.type, note=msg.note, channel=channel+1, velocity=vel, port=port)
+        #     else:
+        #         midi.send(msg, port=port, channel=channel+1)
 
         inst = channel_inst(channel)
         pitch = msg.note

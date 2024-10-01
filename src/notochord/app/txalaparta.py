@@ -73,7 +73,6 @@ def main(
     midi_in:Optional[str]=None, # MIDI port for player input
     midi_out:Optional[str]=None, # MIDI port for Notochord output
     thru=False, # copy player input to output
-    send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
 
     input_latency=0.005,
@@ -114,6 +113,7 @@ def main(
             MIDI channels and General MIDI instruments are indexed from 1.
 
         pitch_set: collection of MIDI pitches for the txalaparta boards
+        vel_range: range of velocities used
 
         initial_mute: start Notochord muted so it won't play with input.
         initial_query: query Notochord immediately so it plays even without input.
@@ -126,21 +126,30 @@ def main(
             can be comma-separated list of ports.
         thru: if True, copy incoming MIDI to output ports.
             only makes sense if input and output ports are different.
-        send_pc: if True, send MIDI program change messages to set the General MIDI
-            instrument on each channel according to player_config and noto_config.
-            useful when using a General MIDI synthesizer like fluidsynth.
         dump_midi: if True, print all incoming MIDI for debugging purposes
 
-        balance_sample choose instruments which have played less recently
-            ensures that all configured instruments will play.
-        n_recent: number of recent note-on events to consider for above
-        n_margin: amount of 'slack' in the balance_sample calculation
-
+        min_time: minimum time in seconds between predicted events.
+            default is 0.
         max_time: maximum time in seconds between predicted events.
             default is the Notochord model's maximum (usually 10 seconds).
         nominal_time: if True, feed Notochord with its own predicted times
             instead of the actual elapsed time.
-            May make Notochord more likely to play chords.
+        backoff_time: time in seconds to wait before querying,
+            if a predicted player event doesn't occur
+
+        input_latency: estimated input latency in seconds
+        rhythm_temp: temperature for sampling time mixture component,
+        timing_temp: temperature for sampling time component distribution
+        steer_rate: 0.5 is unbiased; values >0.5 tend faster, <0.5 tend slower
+
+        auto_reset: reset the notochord model when it predicts end of sequence
+        start_after: don't sample notochord until this many total events
+        max_run: player of the next hit must change after this many 
+            consecutive hits. can also be a dict with different values 
+            for p1 and p2
+        min_run: player of the next hit cannot change before this many 
+            consecutive hits. can also be a dict with different values 
+            for p1 and p2
 
         osc_port: optional. if supplied, listen for OSC to set controls
         osc_host: hostname or IP of OSC sender.
@@ -225,11 +234,6 @@ def main(
                 print(f"WARNING: drum instrument {i} selected, be sure to select a drum bank in your synthesizer")
             else:
                 print(f"WARNING: instrument {i} is not General MIDI")
-
-    if send_pc:
-        for c,i in (player_map | noto_map).items():
-            warn_inst(i)
-            midi.program_change(channel=c, program=(i-1)%128)
     
     # load notochord model
     try:
