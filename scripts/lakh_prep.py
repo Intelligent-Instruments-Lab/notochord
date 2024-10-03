@@ -136,9 +136,10 @@ def process(fnames):
                 
             elif msg.type in ('note_on', 'note_off'):
 
-                # triple of track number, channel number, current instrument
+                # make channel 9 with no PC standard drumkit
                 if msg.channel not in channel_instruments and msg.channel==9:
                     channel_instruments[msg.channel] = 129
+                # triple of track number, channel number, current instrument
                 part = (track_idx, msg.channel, channel_instruments[msg.channel])
                 pitch = msg.note
                 

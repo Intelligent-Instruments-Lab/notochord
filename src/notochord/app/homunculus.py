@@ -54,6 +54,7 @@ from datetime import datetime
 
 import numpy as np
 import toml_file
+import mido
 
 import torch
 torch.set_num_threads(1)
@@ -74,6 +75,8 @@ def main(
     config:Dict[int,Dict[str,Any]]=None, # map MIDI channel : GM instrument
     preset:str=None,
     preset_file:Path=None,
+
+    midi_prompt:Path=None,
 
     initial_mute=False, # start with Notochord muted
     initial_query=False, # let Notochord start playing immediately
@@ -183,6 +186,9 @@ def main(
             path to a TOML file containing channel presets
             the default config file is `homunculus.toml`; 
             running `notochord files` will show its location.
+
+        midi_prompt:
+            path to a MIDI file to read in as a prompt
 
         initial_mute: 
             start 'auto' voices muted so it won't play with input.
@@ -417,6 +423,51 @@ def main(
     except Exception:
         print("""error loading notochord model""")
         raise
+
+    # TODO: deduplicate this code
+    class AnonTracks:
+        def __init__(self):
+            self.n = 0
+        def __call__(self):
+            self.n += 1
+            return 256+self.n
+
+    if midi_prompt is not None:
+        mid = mido.MidiFile(midi_prompt)
+        ticks_per_beat = mid.ticks_per_beat
+        us_per_beat = 500_000
+        time_seconds = 0
+        event_count = 0
+        print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
+        next_anon = AnonTracks()
+        mid_channel_inst = defaultdict(next_anon)
+        # if len(mid.tracks) > 1:
+            # print('WARNING: only first track of midi prompt will be read')
+        for msg in mid:#.tracks[0]:
+            # when iterating over a track this is ticks,
+            # when iterating the whole file it's seconds
+            time_seconds += msg.time# * us_per_beat / ticks_per_beat / 1e6
+
+            if msg.type=='program_change':
+                mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
+                
+            elif msg.type=='set_tempo':
+                us_per_beat = msg.tempo
+                print(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
+                
+            elif msg.type in ('note_on', 'note_off'):
+                # make channel 9 with no PC standard drumkit
+                if msg.channel not in mid_channel_inst and msg.channel==9:
+                    mid_channel_inst[msg.channel] = 129
+
+                event_count += 1
+
+            else: continue
+
+        print(f'MIDI file: {event_count} events in {time_seconds} seconds')
+        print(mid_channel_inst)
+        # WIP
+
 
     def dedup_inst(c, i):
         # change to anon if already in use
