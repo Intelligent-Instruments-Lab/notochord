@@ -55,6 +55,7 @@ from datetime import datetime
 import numpy as np
 import toml_file
 import mido
+from tqdm import tqdm
 
 import torch
 torch.set_num_threads(1)
@@ -95,7 +96,7 @@ def main(
     
     max_note_len=5, # in seconds, to auto-release stuck Notochord notes
     max_time=None, # max time between events
-    nominal_time=False, #feed Notochord with nominal dt instead of actual
+    nominal_time=True, #feed Notochord with nominal dt instead of actual
 
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
@@ -105,7 +106,8 @@ def main(
     predict_follow=False,
     debug_query=False, # don't query notochord when there is no pending event.
     testing=False,
-    estimated_latency=15e-3,
+    estimated_query_latency=10e-3,
+    estimated_feed_latency=10e-3,
     soundfont=None,
     limit_input=None,
     thru_vel_offset=None,
@@ -254,6 +256,8 @@ def main(
         osc = OSC(osc_host, osc_port)
     midi = MIDI(midi_in, midi_out, suppress_feedback=suppress_midi_feedback)
 
+    estimated_latency = estimated_feed_latency + estimated_query_latency
+
     if input_channel_map is None: input_channel_map = {}
 
     if soundfont is not None:
@@ -296,6 +300,7 @@ def main(
     print = notochord.print = iipyper.print = tui.print
     ###
 
+    
     # make preset file if it doesn't exist
     cfg_dir = Notochord.user_data_dir()
     default_preset_file = cfg_dir / 'homunculus.toml'
@@ -325,7 +330,7 @@ def main(
 
     # defaults
     def default_config_channel(i):
-        return {'mode':'auto', 'inst':1, 'mute':True, 'mono':False, 'source':max(1,i-1), 'note_shift':0}
+        return {'mode':'auto', 'inst':257, 'mute':True, 'mono':False, 'source':max(1,i-1), 'note_shift':0}
     
     # convert MIDI channels to int
     # print(presets)
@@ -333,6 +338,20 @@ def main(
         p['channel'] = {
             int(k):{**default_config_channel(i), **v} 
             for i,(k,v) in enumerate(p['channel'].items(),1)}
+    
+    # load notochord model
+    try:
+        noto = Notochord.from_checkpoint(checkpoint)
+        noto.eval()
+        noto.feed(0,0,0,0)
+        noto.query()
+        noto.reset()
+    except Exception:
+        print("""error loading notochord model""")
+        raise
+
+    ### this feeds all events from the prompt file to notochord
+    config_ingest = ingest_midi(midi_prompt, noto)
 
     # TODO: config from CLI > config from preset file > channel defaults
     #       warn if preset is overridden by config
@@ -359,7 +378,10 @@ def main(
         config[k].update(v)
     for k,v in config_cli.items():
         config[k].update(v)
-    
+    for k,v in config_ingest.items():
+        config[k].update(v)
+
+    # print(f'{config=}')
 
     def validate_config():
         assert all(
@@ -413,62 +435,6 @@ def main(
             if v['mode']=='follow' 
             and v.get('source', None)==chan]
       
-    # load notochord model
-    try:
-        noto = Notochord.from_checkpoint(checkpoint)
-        noto.eval()
-        noto.feed(0,0,0,0)
-        noto.query()
-        noto.reset()
-    except Exception:
-        print("""error loading notochord model""")
-        raise
-
-    # TODO: deduplicate this code
-    class AnonTracks:
-        def __init__(self):
-            self.n = 0
-        def __call__(self):
-            self.n += 1
-            return 256+self.n
-
-    if midi_prompt is not None:
-        mid = mido.MidiFile(midi_prompt)
-        ticks_per_beat = mid.ticks_per_beat
-        us_per_beat = 500_000
-        time_seconds = 0
-        event_count = 0
-        print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
-        next_anon = AnonTracks()
-        mid_channel_inst = defaultdict(next_anon)
-        # if len(mid.tracks) > 1:
-            # print('WARNING: only first track of midi prompt will be read')
-        for msg in mid:#.tracks[0]:
-            # when iterating over a track this is ticks,
-            # when iterating the whole file it's seconds
-            time_seconds += msg.time# * us_per_beat / ticks_per_beat / 1e6
-
-            if msg.type=='program_change':
-                mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
-                
-            elif msg.type=='set_tempo':
-                us_per_beat = msg.tempo
-                print(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
-                
-            elif msg.type in ('note_on', 'note_off'):
-                # make channel 9 with no PC standard drumkit
-                if msg.channel not in mid_channel_inst and msg.channel==9:
-                    mid_channel_inst[msg.channel] = 129
-
-                event_count += 1
-
-            else: continue
-
-        print(f'MIDI file: {event_count} events in {time_seconds} seconds')
-        print(mid_channel_inst)
-        # WIP
-
-
     def dedup_inst(c, i):
         # change to anon if already in use
         def in_use():
@@ -478,6 +444,7 @@ def main(
                 and config[c_other]['mode']!='follow'
                 for c_other in config)
         if in_use():
+            # print(i, config)
             i = noto.first_anon_like(i)
         while in_use():
             i = i+1
@@ -492,9 +459,11 @@ def main(
             midi.control_change(channel=c-1, control=32, value=0)
             midi.control_change(channel=c-1, control=0, value=0)
         if noto.is_anon(i):
-            i = 0
-        # convert to 0-index
-        midi.program_change(channel=c-1, program=(i-1)%128)
+            program = 0
+        else:
+            # convert to 0-index
+            program = (i-1) % 128
+        midi.program_change(channel=c-1, program=program)
 
     for c,i in channel_insts():
         if send_pc:
@@ -678,7 +647,7 @@ def main(
 
         # query the fresh notochord for a new prediction
         if pending.gate:
-            auto_query()
+            auto_query(immediate=True)
 
     # @lock
     def noto_mute(sustain=False):
@@ -715,7 +684,10 @@ def main(
 
     # query Notochord for a new next event
     # @lock
-    def auto_query(predict_input=predict_input, predict_follow=predict_follow):
+    def auto_query(
+            predict_input=predict_input, 
+            predict_follow=predict_follow,
+            immediate=False):
         # check for stuck notes
         # and prioritize ending those
         for (_, inst, pitch), note_data in history.note_data.items():
@@ -727,7 +699,7 @@ def main(
                 # query for the end of a note with flexible timing
                 # with profile('query', print=print, enable=profiler):
                 t = stopwatch.read()
-                mt = max(t, min(max_time, t+0.2))
+                mt = max(t, min(max_time or np.inf, t+0.2))
                 pending.event = noto.query(
                     next_inst=inst, next_pitch=pitch,
                     next_vel=0, min_time=t, max_time=mt)
@@ -746,8 +718,15 @@ def main(
         # *subtract* estimated feed latency to min_time; (TODO: really should
         #   set no min time when querying, use stopwatch when re-querying...)
         # if using actual time, *add* estimated query latency
-        time_offset = -5e-3 if nominal_time else 10e-3
-        min_time = stopwatch.read()+time_offset
+        if immediate and nominal_time:
+            min_time = 0
+        else:
+            time_offset = (
+                (-estimated_feed_latency )
+                if nominal_time else 
+                estimated_query_latency)
+            min_time = stopwatch.read()+time_offset
+        print(f'{min_time=}')
 
         # if max_time < min_time, exclude input instruments
         input_late = max_time is not None and max_time < min_time
@@ -815,6 +794,8 @@ def main(
             for i in allowed_insts
             if i in held_notes
         }
+
+        # print(note_on_map, note_off_map)
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
@@ -997,7 +978,7 @@ def main(
             channel=channel, send=thru, tag='PLAYER')
 
         # query for new prediction
-        auto_query()
+        auto_query(immediate=True)
 
         # send a MIDI reply for latency testing purposes:
         # if testing: midi.cc(control=3, value=msg.note, channel=15)
@@ -1076,7 +1057,7 @@ def main(
             # if get_dt() < noto.max_dt and not debug_query:
             if not debug_query:
                 with profile('auto_query', print=print, enable=profiler):
-                    auto_query()
+                    auto_query(immediate=True)
         # adaptive time resolution here -- yield to other threads when 
         # next event is not expected, but time precisely when next event
         # is imminent
@@ -1116,6 +1097,10 @@ def main(
         print('https://intelligent-instruments-lab.github.io/notochord/reference/notochord/app/homunculus/')
         print('or run `notochord homunculus --help`')
         print('to exit, use CTRL+C')
+
+        if initial_query:
+            auto_query(predict_input=False, predict_follow=False)
+
 
     ### set_* does whatever necessary to change channel properties
     ### calls update_config() to keep the UI in sync
@@ -1203,6 +1188,7 @@ def main(
         config[c]['mute'] = b
         if update:
             update_config()
+
 
     ### action_* runs on key/button press;
     ### invokes cycler / picker logic and calls set_*
@@ -1331,11 +1317,10 @@ def main(
                 ), id="dialog",
             )
 
-    if initial_query:
-        auto_query(predict_input=False, predict_follow=False)
-
     if use_tui:
         tui.run()
+    elif initial_query:
+        auto_query(predict_input=False, predict_follow=False)
 
 ### def TUI components ###
 class NotoLog(Log):
@@ -1571,6 +1556,67 @@ def inst_label(i):
         return f"--- \n-----\n-----"
     return f'{i:03d} \n{gm_names[i]}'
 ### end def TUI components###
+
+
+def ingest_midi(midi_file, noto):
+    ### read MIDI file
+    # TODO: deduplicate this code
+    class AnonTracks:
+        def __init__(self):
+            self.n = 0
+        def __call__(self):
+            self.n += 1
+            return 256+self.n
+    next_anon = AnonTracks()
+    mid_channel_inst = defaultdict(next_anon)
+
+    if midi_file is not None:
+        mid = mido.MidiFile(midi_file)
+        ticks_per_beat = mid.ticks_per_beat
+        us_per_beat = 500_000
+        time_seconds = 0
+        prev_time_seconds = 0
+        event_count = defaultdict(int)
+        print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
+        # if len(mid.tracks) > 1:
+            # print('WARNING: only first track of midi prompt will be read')
+        for msg in tqdm(mid, desc='ingesting MIDI prompt'):#.tracks[0]:
+            # when iterating over a track this is ticks,
+            # when iterating the whole file it's seconds
+            time_seconds += msg.time# * us_per_beat / ticks_per_beat / 1e6
+
+            if msg.type=='program_change':
+                mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
+                tqdm.write(str(msg))
+                
+            elif msg.type=='set_tempo':
+                us_per_beat = msg.tempo
+                tqdm.write(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
+                
+            elif msg.type in ('note_on', 'note_off'):
+                # make channel 10 with no PC standard drumkit
+                if msg.channel not in mid_channel_inst and msg.channel==9:
+                    mid_channel_inst[msg.channel] = 129
+
+                event_count[mid_channel_inst[msg.channel]] += 1
+                noto.feed(
+                    mid_channel_inst[msg.channel],
+                    msg.note,
+                    time_seconds - prev_time_seconds,
+                    msg.velocity if msg.type=='note_on' else 0)
+                prev_time_seconds = time_seconds
+
+            else: continue
+
+        print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
+        # print(event_count)
+        # print(mid_channel_inst)
+        
+        config = {
+            c+1:{'inst':i, 'mode':'auto', 'mute':False} 
+            for c,i in mid_channel_inst.items()}
+        
+        return config
 
 
 if __name__=='__main__':

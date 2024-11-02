@@ -851,7 +851,7 @@ class Notochord(nn.Module):
             pitch_topk: Optional[int]. if not None, instead of sampling pitch, 
                 stack the top k most likely pitches along the batch dimension
             sweep_time: if True, instead of sampling time, choose a diverse set
-                of times and stack along the batch dimension
+            of times and stack along the batch dimension
 
             # other
 

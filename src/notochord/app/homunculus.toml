@@ -129,3 +129,22 @@ channel.13 = {mode="auto", inst=118}
 channel.14 = {mode="auto", inst=119}
 channel.15 = {mode="auto", inst=120}
 channel.16 = {mode="auto", inst=48}
+
+[[preset]]
+name = "muted"
+channel.1 = {mode="auto", inst=257}
+channel.2 = {mode="auto", inst=258}
+channel.3 = {mode="auto", inst=259}
+channel.4 = {mode="auto", inst=260}
+channel.5 = {mode="auto", inst=261}
+channel.6 = {mode="auto", inst=262}
+channel.7 = {mode="auto", inst=263}
+channel.8 = {mode="auto", inst=264}
+channel.9 = {mode="auto", inst=265}
+channel.10 = {mode="auto", inst=266}
+channel.11 = {mode="auto", inst=267}
+channel.12 = {mode="auto", inst=268}
+channel.13 = {mode="auto", inst=269}
+channel.14 = {mode="auto", inst=270}
+channel.15 = {mode="auto", inst=271}
+channel.16 = {mode="auto", inst=272}

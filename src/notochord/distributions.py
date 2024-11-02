@@ -93,7 +93,6 @@ class CensoredMixtureLogistic(nn.Module):
         self.register_buffer('lo', torch.tensor(float(lo)))
         self.register_buffer('hi', torch.tensor(float(hi)))
         # TODO: init is not general-purpose
-        #TODO
         if init=='time':
             self.bias = nn.Parameter(torch.cat((
                 torch.zeros(n), torch.logspace(-3,1,n), torch.zeros(n)
