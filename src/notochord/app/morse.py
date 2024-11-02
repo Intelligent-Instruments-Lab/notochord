@@ -26,15 +26,16 @@ def main(
         midi_in=None, # MIDI port for player input
         midi_out=None, # MIDI port for Notochord output
         notochord="notochord-latest.ckpt", # Notochord checkpoint
-        lm="state-spaces/mamba-790m-hf",
+        # lm="state-spaces/mamba-790m-hf",
+        lm="state-spaces/mamba-1.4b-hf",
         verbose=0,
         prompt='morse code is ',
         dit_dur=0.05,
         send_pc=True,
         lm_temp=1,
-        noto_temp=1.5,
-        buffer_events=3,
-        morse_chars = '·–|'
+        # noto_temp=1.5,
+        noto_temp=1,
+        buffer_events=8,
         ):
     midi = MIDI(midi_in, midi_out)
 
@@ -42,7 +43,10 @@ def main(
     noto = Notochord.from_checkpoint(notochord)
     noto.eval()
 
-    c_dot, c_dash, c_space = morse_chars
+    # c_dot, c_dash, c_space = '•', '╺━╸', '┃'
+    # c_dot, c_dash, c_space = '•', '╺╸', '┃'
+    # c_dot, c_dash, c_space = '•', '⁃', '╱'
+    c_dot, c_dash, c_space = '.', '╶╴', '╱'
 
     def do_send_pc(c, i):
         # warn_inst(i)
@@ -142,8 +146,8 @@ def main(
             self.morse_tree = MorseNode.make_tree()
 
             code = self.morse_tree.make_code()
-            self.morse = ''.join(
-                c_space+' ' if c==' ' else ''.join(c_dot if e else c_dash for e in code[c])
+            self.morse = ' '.join(
+                c_space if c==' ' else ''.join(c_dot if e else c_dash for e in code[c])
                 for c in prompt
                 )
             self.text = prompt
@@ -179,6 +183,7 @@ def main(
 
     reset()
 
+    # TODO implement notochord prompt
     def noto_query(dt=None):
         """query notochord + LM as needed for the next MIDI event"""
         query = {}
@@ -211,9 +216,18 @@ def main(
 
         with torch.inference_mode():
             event = noto.query(return_params=True, **query)
-            time_sample = noto.time_dist(event['time_params'], dts)
-            noto_dt_probs = time_sample['log_prob'].exp().squeeze()
-            noto_dt_probs = [x.item() for x in noto_dt_probs]
+
+            dt_breaks = torch.tensor([
+                dit_dur*0.5, dit_dur*1.5, dit_dur*4.5])
+            cdf = noto.time_dist.cdf(event['time_params'], dt_breaks).squeeze()
+            noto_dt_probs = cdf[1:] - cdf[:-1]
+            noto_dt_probs = noto_dt_probs.tolist()
+            if S.is_gap:
+                noto_dt_probs.append(1-cdf[-1].item())
+
+            # time_sample = noto.time_dist(event['time_params'], dts)
+            # noto_dt_probs = time_sample['log_prob'].exp().squeeze()
+            # noto_dt_probs = [x.item() for x in noto_dt_probs]
 
         # print(f'{event["vel"]=}, {event["pitch"]=}')
 
@@ -337,6 +351,8 @@ def main(
 
         S.is_gap = not S.is_gap
 
+        # TODO text gets ahead of music with buffering
+        # should store and print from MIDI thread
         print(S.morse)
         print(S.text)
 
