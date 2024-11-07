@@ -14,6 +14,7 @@ def help():
         harmonizer: run the Notochord harmonizer TUI
         improviser: run the Notochord improviser TUI
         txalaparta: run the txalaparta app
+        morse: run the morse code app
         train: train a Notochord model (GPU recommended)
         files: show the location of Notochord models and config files on disk
     """)
@@ -36,6 +37,9 @@ def _main():
         if sys.argv[1] == 'txalaparta':
             sys.argv = sys.argv[1:]
             run(txalaparta)
+        if sys.argv[1] == 'morse':
+            sys.argv = sys.argv[1:]
+            run(morse)
         if sys.argv[1] == 'train':
             from notochord.train import Resumable
             fire.Fire(Resumable, sys.argv[1:])
