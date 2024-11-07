@@ -36,6 +36,7 @@ def main(
         # noto_temp=1.5,
         noto_temp=1,
         buffer_events=8,
+        device='cpu'
         ):
     midi = MIDI(midi_in, midi_out)
 
@@ -70,6 +71,7 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(lm)
     lm = AutoModelForCausalLM.from_pretrained(lm)
     lm.eval()
+    lm.to(device)
 
     tokens = tokenizer.batch_decode(range(len(tokenizer)))
     alphabet = 'abcdefghijklmnopqrstuvwxyzðþöéæ"\'+-=/.,:;!?() '
@@ -88,20 +90,23 @@ def main(
     def lm_prompt(prompt):
         """feed a text to the language model and return probabilities for the next token and model state"""
         input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
+        input_ids = input_ids.to(lm.device)
         with torch.inference_mode():
             state = lm(input_ids, use_cache=True)
-            probs = state.logits[0,-1,token_idx].softmax(0).tolist()
+            probs = state.logits[0,-1,token_idx].softmax(0).cpu().tolist()
         return probs, state
 
     def lm_feed_query(token, state):
         """feed a token to the language model and return probabilities for the next token and model state"""
         with torch.inference_mode():
             input_ids = tokenizer(token, return_tensors='pt')['input_ids']
+            input_ids = input_ids.to(lm.device)
+
             # print(input_ids, tokens[input_ids.item()])
             cache = None if state is None else state.cache_params
             # t = now()
             state = lm(input_ids, use_cache=True, cache_params=cache)
-            probs = state.logits[0,-1,token_idx].softmax(0).tolist()
+            probs = state.logits[0,-1,token_idx].softmax(0).cpu().tolist()
             # print('LM query ms:', int(1000*(now()-t)))
 
         return probs, state
@@ -151,8 +156,7 @@ def main(
                 for c in prompt
                 )
             self.text = prompt
-            self.token_seq = [] # TODO add tokenizer output
-            self.midi_seq = [] # TODO construct MIDI prompt
+            self.token_text = ''
             self.is_gap = True
             self.first_event = True
             
@@ -269,8 +273,8 @@ def main(
                 c = S.morse_tree.char
                 if verbose > 0:
                     print('--character complete:', c)
-                S.text += c
-                S.morse += ' '
+                event['text'] = c
+                event['morse'] = ' '
 
                 # put the new character into the current token
                 S.token_tree = S.token_tree.traverse(c)
@@ -278,11 +282,11 @@ def main(
                 # possible end of token + LM query
                 # t = now()
                 if S.token_tree.sample_terminal(verbose=verbose):
+                    token = S.token_tree.token
                     if verbose > 0:
-                        print('token complete:', S.token_tree.token)
-                    S.token_seq.append(S.token_tree.token)
-                    S.token_probs, S.lm_state = lm_feed_query(
-                        S.token_tree.token, S.lm_state)
+                        print('token complete:', token)
+                    event['token'] = token
+                    S.token_probs, S.lm_state = lm_feed_query(token, S.lm_state)
                     S.token_tree = token_root
                     set_token_probs(S.token_probs)
 
@@ -306,8 +310,8 @@ def main(
                         if verbose > 0:
                             print('space')
                         S.token_tree = S.token_tree.traverse(' ')
-                        S.text += ' '
-                        S.morse += c_space+' '
+                        event['text'] += ' '
+                        event['morse'] += c_space+' '
                     else:
                         if verbose > 0:
                             print('word continues')
@@ -324,7 +328,7 @@ def main(
                         
         else:
             S.morse_tree = S.morse_tree.traverse(is_1u)
-            S.morse += c_dot if is_1u else c_dash
+            event['morse'] = c_dot if is_1u else c_dash
             if verbose > 0:
                 print('----dit' if is_1u else '----dah')
 
@@ -337,8 +341,6 @@ def main(
 
         with torch.inference_mode():
             noto.feed(**event)
-        S.midi_seq.append({k:event[k] for k in (
-            'inst','pitch','time','vel')})
         
         k = (noto_channel, event['pitch'])
         if event['vel']>0:
@@ -350,11 +352,6 @@ def main(
                 print(f'{k} not in noto_held_notes')
 
         S.is_gap = not S.is_gap
-
-        # TODO text gets ahead of music with buffering
-        # should store and print from MIDI thread
-        print(S.morse)
-        print(S.text)
 
         return event
 
@@ -384,6 +381,7 @@ def main(
             return
     
     # @repeat(1e-3, lock=True)
+
     @repeat(lock=True)
     # @repeat()
     def _():
@@ -402,6 +400,11 @@ def main(
             pitch = int(event['pitch'])
             vel = int(event['vel'])
             midi.note_on(note=pitch, velocity=vel, channel=noto_channel-1)
+
+            S.morse += event.get('morse', '')
+            S.text += event.get('text', '')
+
+            print(S.morse+'\n'+S.text, flush=True)
 
             k = (noto_channel, pitch)
             if vel:
