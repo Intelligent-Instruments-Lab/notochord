@@ -7,12 +7,16 @@ Authors:
 """
 
 import random
-from copy import deepcopy
+# from copy import deepcopy
+import warnings
+
+import rich
+from rich.text import Text
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from notochord import Notochord
-from iipyper import MIDI, run, Stopwatch, cleanup, repeat, _lock
+from iipyper import MIDI, run, cleanup, repeat, _lock
 import time
 
 torch.set_num_threads(1)
@@ -26,6 +30,7 @@ def main(
         midi_in=None, # MIDI port for player input
         midi_out=None, # MIDI port for Notochord output
         notochord="notochord-latest.ckpt", # Notochord checkpoint
+        # lm="state-spaces/mamba-130m-hf",
         # lm="state-spaces/mamba-790m-hf",
         lm="state-spaces/mamba-1.4b-hf",
         verbose=0,
@@ -35,8 +40,9 @@ def main(
         lm_temp=1,
         # noto_temp=1.5,
         noto_temp=1,
+        noto_space=False, # does notochord contribute to prediction of ' ' char
         buffer_events=8,
-        device='cpu'
+        device='cpu',
         ):
     midi = MIDI(midi_in, midi_out)
 
@@ -68,10 +74,12 @@ def main(
         do_send_pc(noto_channel, noto_inst)
 
     print(f'loading language model {lm}')
-    tokenizer = AutoTokenizer.from_pretrained(lm)
-    lm = AutoModelForCausalLM.from_pretrained(lm)
-    lm.eval()
-    lm.to(device)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tokenizer = AutoTokenizer.from_pretrained(lm)
+        lm = AutoModelForCausalLM.from_pretrained(lm)
+        lm.eval()
+        lm.to(device)
 
     tokens = tokenizer.batch_decode(range(len(tokenizer)))
     alphabet = 'abcdefghijklmnopqrstuvwxyzðþöéæ"\'+-=/.,:;!?() '
@@ -116,8 +124,8 @@ def main(
         for node in morse_tree.nodes():
             node.prob = token_tree.children.get(
                 node.char, MorseNode()).subtree_prob()
-            if verbose > 2:
-                print('----setting', node)
+            if verbose > 3:
+                print('    setting', node)
 
     def combine_probs(noto_dt_probs, lm_dt_probs):
         if len(noto_dt_probs)==3:
@@ -126,13 +134,52 @@ def main(
             p1**(1/noto_temp) * p2**(1/lm_temp) 
             for p1, p2 in zip(noto_dt_probs, lm_dt_probs)]
 
+    while prompt.startswith(' '):
+        print('warning: prompt starts with space')
+        prompt = prompt[1:]
     # TODO cache to disk so no delay when prompt is repeated
-    if prompt.endswith(' '):
-        prompt = prompt[:-1]
-        initial_space = True
-    else:
-        initial_space = False
-    initial_token_probs, initial_lm_state = lm_prompt(prompt)
+    # if prompt.endswith(' '):
+    #     prompt = prompt[:-1]
+    #     initial_space = True
+    # else:
+    #     initial_space = False
+    # TODO get these in absence of prompt?? or they should be None?
+    # initial_token_probs, initial_lm_state = lm_prompt(prompt)
+    code = MorseNode.make_tree().make_code()
+    # initial_morse = ' '.join(
+    #     c_space if c==' ' else ''.join(c_dot if e else c_dash for e in code[c])
+    #     for c in prompt
+    #     )
+
+    prompt_us = [0]
+    prompt_token_ends = [False]
+    prompt_tokens = iter(
+        tokenizer.batch_decode(tokenizer(prompt)["input_ids"]))
+    # prompt_u_tokens = [None]
+    current_token = next(prompt_tokens)
+    idx_in_token = 0
+    for c in prompt:
+        if c==' ':
+            prompt_us[-1] = 7 # make it an interword gap
+            # prompt_u_tokens[-1] = (current_token)
+        else:
+            for e in code[c]:
+                prompt_us.append(1 if e else 3) # dit or dah
+                prompt_us.append(1) # gap
+                # prompt_u_tokens.extend([current_token]*2)
+                prompt_token_ends.extend([False]*2)
+            prompt_us[-1] = 3 # make it an intercharacter gap
+
+        idx_in_token += 1
+        if idx_in_token == len(current_token):
+            current_token = next(prompt_tokens, None)
+            idx_in_token = 0
+            prompt_token_ends[-1] = True
+
+        # print(f'{prompt_tokens=}')
+        # print(f'{prompt_us=}')
+        # print(f'{prompt_u_tokens=}')
+        # print(f'{prompt_token_ends=}')
 
     class State:
         def __init__(self):
@@ -146,30 +193,25 @@ def main(
             self.noto_held_notes = set()
             self.synth_held_notes = set()
 
-            self.token_probs = initial_token_probs
-            self.lm_state = deepcopy(initial_lm_state)
+            self.token_probs = None#initial_token_probs
+            self.lm_state = None#deepcopy(initial_lm_state)
             self.morse_tree = MorseNode.make_tree()
 
-            code = self.morse_tree.make_code()
-            self.morse = ' '.join(
-                c_space if c==' ' else ''.join(c_dot if e else c_dash for e in code[c])
-                for c in prompt
-                )
-            self.text = prompt
-            self.token_text = ''
+            self.morse = '' #initial_morse
+            self.text = '' #prompt
+            self.color_text = Text()
+            self.current_token = ''
             self.is_gap = True
-            self.first_event = True
+            # self.first_event = True
             
             self.token_tree = token_root
-            set_token_probs(self.token_probs)
+            # set_token_probs(self.token_probs)
+
             # self.token_tree.set_probs(token_idx, self.token_probs)
             # self.token_tree = TokenNode.make_tree(
                 # tokens, self.token_probs)
             # self.token_tree = TokenNode.make_tree(
             #     tokens, self.token_probs, alphabet)
-            if initial_space:
-                self.token_tree = self.token_tree.traverse(' ')
-                self.text += ' '
             set_morse_probs_from_token(self.morse_tree, self.token_tree)
 
     S = State()
@@ -187,9 +229,18 @@ def main(
 
     reset()
 
-    # TODO implement notochord prompt
-    def noto_query(dt=None):
-        """query notochord + LM as needed for the next MIDI event"""
+    def state_helper(event):
+        k = (noto_channel, event['pitch'])
+        if event['vel']>0:
+            S.noto_held_notes.add(k)
+        else:
+            try:
+                S.noto_held_notes.remove(k)
+            except Exception:
+                print(f'{k} not in noto_held_notes')
+        S.is_gap = not S.is_gap
+
+    def make_query():
         query = {}
         held_pitches = {p for _,p in S.noto_held_notes}
         if S.is_gap:
@@ -199,7 +250,6 @@ def main(
             query['include_pitch'] = set(range(20,100)) - held_pitches
             # query['next_pitch'] = 40
             # query['include_pitch'] = set(range(20,100)) - held_pitches
-
         else:
             # if determining the length of the tone,
             # that means we are predicting the next noteOff
@@ -211,6 +261,113 @@ def main(
                 query['next_pitch'] = list(held_pitches)[0]
         # query['include_inst'] = [1, 8] 
         query['next_inst'] = noto_inst
+        return query
+    
+    def process_event(event, u_possible, noto_dt_probs=None, token_end=None):
+        if S.is_gap:
+            if u_possible == [0]:
+                if verbose > 0:
+                    print('initial event')
+            elif u_possible == [1]:
+                u = 1
+                if verbose > 0:
+                    print('    character continues')
+            else:
+                c = S.morse_tree.char
+                if verbose > 0:
+                    print('  character complete:', c)
+                event['text'] = c
+                event['morse'] = ' '
+
+                # put the new character into the current token
+                S.token_tree = S.token_tree.traverse(c)
+                # print(f'{token_tree.token} {"".join(token_tree.children)}')
+                # possible end of token + LM query
+                if token_end is None:
+                    token_end = S.token_tree.sample_terminal(verbose=verbose)
+                if token_end:
+                    token = S.token_tree.token
+                    if verbose > 0:
+                        print('token complete:', token)
+                    event['token'] = token
+                    S.token_probs, S.lm_state = lm_feed_query(
+                        token, S.lm_state)
+                    S.token_tree = token_root
+                    set_token_probs(S.token_probs)
+
+                    if u_possible==[7]:
+                        space = True
+                    elif u_possible==[3]:
+                        space = False
+                    else:
+                        # now sample nonspace vs space
+                        noto_dt_probs = noto_dt_probs[1:]
+                        space_prob = S.token_tree.children[' '].subtree_prob()
+                        # don't needlessly traverse entire tree to sum probs
+                        lm_dt_probs = [
+                            sum(S.token_probs)-space_prob, space_prob]
+
+                        if verbose > 1:
+                            print(f'      LM prob [nonspace, space] {lm_dt_probs}')
+
+                        if noto_space:
+                            probs = combine_probs(noto_dt_probs, lm_dt_probs)
+                        else:
+                            probs = lm_dt_probs
+
+                        space = random.random() < probs[1] / sum(probs)
+
+                    if space:
+                        u = 7
+                        if verbose > 0:
+                            print('space')
+                        S.token_tree = S.token_tree.traverse(' ')
+                        event['text'] += ' '
+                        event['morse'] += c_space+' '
+                    else:
+                        u = 3
+                        if verbose > 0:
+                            print('word continues')
+
+                else:
+                    if verbose > 0:
+                        print('  token continues')
+                    u = 3
+
+                # get next character probs from the token tree
+                S.morse_tree = MorseNode.make_tree()
+                set_morse_probs_from_token(S.morse_tree, S.token_tree)
+                        
+        else:
+            assert len(u_possible)==1
+            u = u_possible[0]
+            S.morse_tree = S.morse_tree.traverse(u==1)
+            event['morse'] = c_dot if u==1 else c_dash
+            if verbose > 0:
+                print('    dit' if u==1 else '    dah')
+
+        return u
+
+    def noto_prompt(u, token_end):
+        """needs to know the duration of current event, plus whether a token is ending"""
+        query = make_query()
+        query['next_time'] = u*dit_dur
+        # print(f'{u=} {token_end=} {S.is_gap=} {S.morse_tree=} {S.token_tree=}')
+
+        event = noto.query_feed(**query)
+
+        if u!=0:
+            process_event(event, [u], token_end=token_end)
+
+        state_helper(event)
+
+        return event
+
+    def noto_query():
+        """query notochord + LM as needed for the next MIDI event
+        """
+
+        query = make_query()
 
         if S.is_gap:
             dts = [1,3,7]
@@ -238,120 +395,42 @@ def main(
         # get LM dt probs from tree
         if S.is_gap:
             if verbose > 1:
-                print(f'------noto prob [1u, 3u, 7u] {noto_dt_probs}')
+                print(f'      noto prob [1u, 3u, 7u] {noto_dt_probs}')
             # 1: char continues; 3,7: end of char
             # here, the 3,7 probs only need to add up correctly (hence prob/2)
             # we'll check the LM again only if the token ends
             lm_dt_probs = [S.morse_tree.children_prob(), S.morse_tree.prob]
             if verbose > 1:
-                print(f'------LM prob [{S.morse_tree.children_chars()}, {S.morse_tree.char}] {lm_dt_probs}')
+                print(f'      LM prob [{S.morse_tree.children_chars()}, {S.morse_tree.char}] {lm_dt_probs}')
         else:
             if verbose > 1:
-                print(f'------noto prob [1u, 3u] {noto_dt_probs}')
+                print(f'      noto prob [1u, 3u] {noto_dt_probs}')
             # 1: dit, 3: dah
             dit = S.morse_tree.traverse(True)
             dah = S.morse_tree.traverse(False)
             lm_dt_probs = [dit.subtree_prob(), dah.subtree_prob()]
             if verbose > 1:
-                print(f'------LM prob [dit, dah] [{dit.chars()}, {dah.chars()}] {lm_dt_probs}')
+                print(f'      LM prob [dit, dah] [{dit.chars()}, {dah.chars()}] {lm_dt_probs}')
 
         # print(f'{"gap" if is_gap else "tone"} {lm_dt_probs=}')
 
         probs = combine_probs(noto_dt_probs, lm_dt_probs)
         if verbose > 1:
-            print(f'------combined {probs=}')
+            print(f'      combined {probs=}')
 
         # here we sample 1 vs 3 or 1 vs 3,7
         is_1u = random.random() < probs[0] / (sum(probs) + 1e-10)
 
-        is_7u = False # can be changed only when new token starts, below
-        if S.is_gap:
-            if is_1u:
-                if verbose > 0:
-                    print('----character continues')
-            else:
-                c = S.morse_tree.char
-                if verbose > 0:
-                    print('--character complete:', c)
-                event['text'] = c
-                event['morse'] = ' '
+        u_possible = [1] if is_1u else ([3,7] if S.is_gap else [3])
 
-                # put the new character into the current token
-                S.token_tree = S.token_tree.traverse(c)
-                # print(f'{token_tree.token} {"".join(token_tree.children)}')
-                # possible end of token + LM query
-                # t = now()
-                if S.token_tree.sample_terminal(verbose=verbose):
-                    token = S.token_tree.token
-                    if verbose > 0:
-                        print('token complete:', token)
-                    event['token'] = token
-                    S.token_probs, S.lm_state = lm_feed_query(token, S.lm_state)
-                    S.token_tree = token_root
-                    set_token_probs(S.token_probs)
+        u = process_event(event, u_possible, noto_dt_probs=noto_dt_probs)
 
-                    # now sample nonspace vs space
-                    noto_dt_probs = noto_dt_probs[1:]
-                    space_prob = S.token_tree.children[' '].subtree_prob()
-                    # don't needlessly traverse entire tree to sum probs
-                    lm_dt_probs = [
-                        # S.token_tree.subtree_prob()-space_prob, space_prob]
-                        sum(S.token_probs)-space_prob, space_prob]
-
-                    # NOTE: prob of space characters coming only from LM
-                    # notochord is usually reluctant 
-                    # probs = combine_probs(noto_dt_probs, lm_dt_probs)
-                    probs = lm_dt_probs
-                    is_7u = random.random() < probs[1] / sum(probs)
-                    if verbose > 1:
-                        print(f'------LM prob [nonspace, space] {lm_dt_probs}')
-
-                    if is_7u:
-                        if verbose > 0:
-                            print('space')
-                        S.token_tree = S.token_tree.traverse(' ')
-                        event['text'] += ' '
-                        event['morse'] += c_space+' '
-                    else:
-                        if verbose > 0:
-                            print('word continues')
-
-                else:
-                    if verbose > 0:
-                        print('--token continues')
-
-                # print('check token end ms:', int(1000*(now()-t)))
-
-                # get next character probs from the token tree
-                S.morse_tree = MorseNode.make_tree()
-                set_morse_probs_from_token(S.morse_tree, S.token_tree)
-                        
-        else:
-            S.morse_tree = S.morse_tree.traverse(is_1u)
-            event['morse'] = c_dot if is_1u else c_dash
-            if verbose > 0:
-                print('----dit' if is_1u else '----dah')
-
-        event['time'] = dts.squeeze()[0 if is_1u else (2 if is_7u else 1)]
-
-        if S.first_event:
-            # set the initial dt to 0 to avoid biasing notochord toward 1u
-            event['time'] = 0
-            S.first_event = False
+        event['time'] = u*dit_dur
 
         with torch.inference_mode():
             noto.feed(**event)
         
-        k = (noto_channel, event['pitch'])
-        if event['vel']>0:
-            S.noto_held_notes.add(k)
-        else:
-            try:
-                S.noto_held_notes.remove(k)
-            except Exception:
-                print(f'{k} not in noto_held_notes')
-
-        S.is_gap = not S.is_gap
+        state_helper(event)
 
         return event
 
@@ -382,16 +461,15 @@ def main(
     
     # @repeat(1e-3, lock=True)
 
+    color_generator = random.Random()
+    def cg():
+        return color_generator.randint(150,255)
+
     @repeat(lock=True)
-    # @repeat()
     def _():
         """Loop, consuming scheduled events"""
-        # print(S.next_event is None, now(), S.next_event_time)
-
-        # print(f'{now()=}')
 
         late = now() - S.next_event_times[0] if len(S.next_events) else -1
-        # late = -1 if S.next_event is None else now() - S.next_event_time
         if late >= 0:
             if late > 10e-3:
                 print(f'{late=}')
@@ -402,9 +480,24 @@ def main(
             midi.note_on(note=pitch, velocity=vel, channel=noto_channel-1)
 
             S.morse += event.get('morse', '')
-            S.text += event.get('text', '')
+            char = event.get('text', '')
+            # S.text += event.get('text', '')
 
-            print(S.morse+'\n'+S.text, flush=True)
+            if 'token' in event:
+                tok = event['token']
+                color_generator.seed(tok)
+                S.color_text.append(event['token'], style=f'rgb({cg()},{cg()},{cg()})')
+                S.current_token = ' ' if char.endswith(' ') else ''
+            else:
+                S.current_token += char
+
+            rich.print(
+                Text('\n'+S.morse+'\n')+S.color_text+Text(S.current_token), 
+                sep='', end='')
+
+            # print(
+                # '\n'+S.morse+'\n'+S.text, 
+                # flush=True, end='')
 
             k = (noto_channel, pitch)
             if vel:
@@ -415,8 +508,6 @@ def main(
                 except Exception:
                     print(f'{k} not in synth_held_notes')
 
-            # S.last_event_time = S.next_event_time
-            # S.next_event = None
             S.last_event_time = S.next_event_times.pop(0)
 
         dt = S.next_event_times[0] - now() if len(S.next_event_times) else 10e-3
@@ -424,7 +515,7 @@ def main(
 
     @repeat(10e-3, lock=False)
     def _():
-        """Loop, predicting next events"""
+        """Loop, predicting next events"""          
         if len(S.next_events) < buffer_events:
             final_time = (
                 S.next_event_times[-1] if len(S.next_event_times) 
@@ -433,14 +524,20 @@ def main(
             # t = now()
             # if final_time is not None:
                 # print('buffered time ms:', int(1000*(final_time-t)))
-            event = noto_query()
+            if len(prompt_us):
+                u = prompt_us.pop(0)
+                # token = prompt_u_tokens.pop(0)
+                token_end = prompt_token_ends.pop(0)
+                event = noto_prompt(u, token_end) 
+            else:
+                event = noto_query()
             # print('query time ms:', int(1000*(now()-t)))
 
             with _lock:
                 S.next_events.append(event)
 
                 if final_time is None:
-                    S.next_event_times.append(now())
+                    S.next_event_times.append(now() + 2)
                 else:
                     S.next_event_times.append(final_time + float(event['time']))
 
@@ -673,6 +770,7 @@ class TokenNode:
     
     def sample_terminal(self, verbose=0):
         if verbose>2:
+            # print(self)
             print(f'----terminal prob: {self.prob / self.subtree_prob()}')
         if self.prob > 0:
             if random.random() < self.prob / self.subtree_prob():

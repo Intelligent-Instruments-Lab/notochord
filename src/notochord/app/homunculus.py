@@ -378,8 +378,9 @@ def main(
         config[k].update(v)
     for k,v in config_cli.items():
         config[k].update(v)
-    for k,v in config_ingest.items():
-        config[k].update(v)
+    if config_ingest is not None:
+        for k,v in config_ingest.items():
+            config[k].update(v)
 
     # print(f'{config=}')
 
@@ -561,8 +562,6 @@ def main(
         source_inst = source_event['inst']
         source_k = (source_channel, source_inst, source_pitch)
 
-        # TODO: process events from 'follow' channels
-
         dt = 0 if nominal_time else estimated_latency
 
         if source_vel > 0:
@@ -715,8 +714,8 @@ def main(
         # print(f'{counts=}')
 
         # if using nominal time,
-        # *subtract* estimated feed latency to min_time; (TODO: really should
-        #   set no min time when querying, use stopwatch when re-querying...)
+        # *subtract* estimated feed latency from min_time; unless immediately 
+        # querying following a previous event, in which case let min_time be 0
         # if using actual time, *add* estimated query latency
         if immediate and nominal_time:
             min_time = 0
