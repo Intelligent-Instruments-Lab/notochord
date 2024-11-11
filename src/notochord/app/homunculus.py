@@ -234,9 +234,9 @@ def main(
             maximum seconds between predicted events for 'auto' voices.
             default is the Notochord model's maximum (usually 10 seconds).
         nominal_time: 
-            if True, feed Notochord with its own predicted times
-            instead of the actual elapsed time.
-            May make Notochord more likely to play chords.
+            deprecated. when False, now sets lateness_margin to 0
+        lateness_margin:
+            when events are playing later than this (in seconds), slow down
 
         osc_port: 
             optional. if supplied, listen for OSC to set controls
