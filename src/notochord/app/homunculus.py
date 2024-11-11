@@ -71,6 +71,9 @@ from textual.widgets import Header, Footer, Static, Button, Log, RichLog, Label
 from textual.screen import Screen, ModalScreen
 from textual.containers import Grid
 
+def now():
+    return time.perf_counter()
+
 def main(
     checkpoint="notochord-latest.ckpt", # Notochord checkpoint
     config:Dict[int,Dict[str,Any]]=None, # map MIDI channel : GM instrument
@@ -96,7 +99,7 @@ def main(
     
     max_note_len=5, # in seconds, to auto-release stuck Notochord notes
     max_time=None, # max time between events
-    nominal_time=True, #feed Notochord with nominal dt instead of actual
+    nominal_time=True, #DEPRECATED
 
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
@@ -108,6 +111,7 @@ def main(
     testing=False,
     estimated_query_latency=10e-3,
     estimated_feed_latency=10e-3,
+    lateness_margin=100e-3, # when events are playing later than this, slow down
     soundfont=None,
     limit_input=None,
     thru_vel_offset=None,
@@ -300,6 +304,9 @@ def main(
     print = notochord.print = iipyper.print = tui.print
     ###
 
+    if not nominal_time:
+        print('nominal_time is deprecated; nominal_time=False now sets lateness_margin to 0')
+        lateness_margin = 0
     
     # make preset file if it doesn't exist
     cfg_dir = Notochord.user_data_dir()
@@ -471,14 +478,42 @@ def main(
             do_send_pc(c, i)
         config[c]['inst'] = dedup_inst(c, i)
 
-    # main stopwatch to track time difference between MIDI events
-    stopwatch = Stopwatch()
-
     # simple class to hold pending event prediction
     class Prediction:
         def __init__(self):
-            self.event = None
             self.gate = not initial_mute
+            self.clear()
+        def clear(self):
+            self.event = None
+            self.last_event_time = None
+            self.next_event_time = None
+            self.lateness = 0
+            tui.defer(prediction=None)
+        def occurred(self):
+            self.event = None
+            self.last_event_time = self.next_event_time
+        def set(self, event):
+            if event.get('time') is None:
+                event['time'] = self.time_since()
+            self.event = event
+            self.next_event_time = event['time'] + (
+                self.last_event_time or now())
+            tui.defer(prediction=pending.event)
+            # print(f'{now()=} {self.next_event_time=}')
+        def time_since(self):
+            if self.last_event_time is None:
+                return 0
+            else:
+                return now() - self.last_event_time
+        def time_until(self):
+            if self.next_event_time is None: 
+                return float('inf')
+            else:
+                return self.next_event_time - now()
+        def is_auto(self):
+            if self.event is None:
+                return False
+            return self.event['inst'] in mode_insts('auto')
     pending = Prediction()    
 
     # tracks held notes, recently played instruments, etc
@@ -515,17 +550,21 @@ def main(
         midi.send(kind, note=note, velocity=velocity, channel=channel-1, port=port)
 
     def play_event(
-            event, channel, 
+            channel, 
             parent=None, # parent note as (channel, inst, pitch)
             feed=True, 
             send=True, 
             tag=None, memo=None):
         """realize an event as MIDI, terminal display, and Notochord update"""
+        event = pending.event
+        time_until = pending.time_until()
+        pending.lateness = -time_until # set at the time of playing
+        if time_until < -0.1:
+            # print(f'late {-time_until} {pending.last_event_time=} {pending.next_event_time=} {event.get("time")=} {now()=}')
+            print(f'late {-time_until} at {now()=}')
+        pending.occurred()
         # normalize values
         vel = event['vel'] = math.ceil(event['vel'])
-        dt = stopwatch.punch()
-        if 'time' not in event or not nominal_time:
-            event['time'] = dt
 
         # send out as MIDI
         if send:
@@ -562,7 +601,7 @@ def main(
         source_inst = source_event['inst']
         source_k = (source_channel, source_inst, source_pitch)
 
-        dt = 0 if nominal_time else estimated_latency
+        dt = 0
 
         if source_vel > 0:
             # NoteOn
@@ -597,11 +636,13 @@ def main(
                         time=0, vel=source_vel)
                 else:
                     # notochord chooses pitch
-                    h = noto.query(
+                    pending.set(noto.query(
                         next_inst=noto_inst, next_time=dt, next_vel=source_vel,
-                        include_pitch=pitches)
+                        include_pitch=pitches))
                     
-                play_event(h, noto_channel, parent=source_k, tag='NOTO', memo='follow')
+                play_event(
+                    noto_channel, 
+                    parent=source_k, tag='NOTO', memo='follow')
         # NoteOff
         else:
             # print(f'{history.note_data=}')
@@ -613,8 +654,9 @@ def main(
             ]
 
             for noto_channel, noto_inst, noto_pitch in dependents:
-                h = dict(inst=noto_inst, pitch=noto_pitch, time=dt, vel=0)
-                play_event(h, noto_channel,tag='NOTO', memo='follow')
+                pending.set(dict(
+                    inst=noto_inst, pitch=noto_pitch, time=dt, vel=0))
+                play_event(noto_channel,tag='NOTO', memo='follow')
 
     # @lock
     def noto_reset():
@@ -622,15 +664,15 @@ def main(
         print('RESET')
 
         # cancel pending predictions
-        pending.event = None
-        tui.defer(prediction=pending.event)
+        pending.clear()
         
         # end Notochord held notes
         # for (chan,inst,pitch) in history.note_triples:
         for note in history.notes:
             if note.inst in mode_insts('auto'):
+                pending.set(dict(
+                    inst=note.inst, pitch=note.pitch, vel=0))
                 play_event(
-                    dict(inst=note.inst, pitch=note.pitch, vel=0),
                     channel=note.chan, 
                     feed=False, # skip feeding Notochord since we are resetting it
                     tag='NOTO', memo='reset')
@@ -639,8 +681,6 @@ def main(
         noto.reset()
         # reset history
         history.push()
-        # reset stopwatch
-        stopwatch.punch()
 
         # TODO: feed note-ons from any held input/follower notes?
 
@@ -667,8 +707,7 @@ def main(
                 # auto_query()
             return
         # cancel pending predictions
-        pending.event = None
-        tui.defer(prediction=pending.event)
+        pending.clear()
 
         if sustain:
             return
@@ -677,8 +716,9 @@ def main(
         # for (chan,inst,pitch) in history.note_triples:
         for note in history.notes:
             if note.chan in mode_chans('auto'):
+                pending.set(dict(
+                    inst=note.inst, pitch=note.pitch, vel=0))
                 play_event(
-                    dict(inst=note.inst, pitch=note.pitch, vel=0), 
                     channel=note.chan, tag='AUTO', memo='mute')
 
     # query Notochord for a new next event
@@ -697,13 +737,12 @@ def main(
                 ):
                 # query for the end of a note with flexible timing
                 # with profile('query', print=print, enable=profiler):
-                t = stopwatch.read()
+                t = pending.time_since()
                 mt = max(t, min(max_time or np.inf, t+0.2))
-                pending.event = noto.query(
+                pending.set(noto.query(
                     next_inst=inst, next_pitch=pitch,
-                    next_vel=0, min_time=t, max_time=mt)
+                    next_vel=0, min_time=t, max_time=mt))
                 print(f'END STUCK NOTE {inst=},{pitch=}')
-                tui.defer(prediction=pending.event)
                 return
 
         # all_insts = mode_insts(('auto', 'input', 'follow'), allow_muted=True)
@@ -717,15 +756,18 @@ def main(
         # *subtract* estimated feed latency from min_time; unless immediately 
         # querying following a previous event, in which case let min_time be 0
         # if using actual time, *add* estimated query latency
-        if immediate and nominal_time:
+        if immediate:
             min_time = 0
         else:
-            time_offset = (
-                (-estimated_feed_latency )
-                if nominal_time else 
-                estimated_query_latency)
-            min_time = stopwatch.read()+time_offset
-        print(f'{min_time=}')
+            time_offset = -estimated_feed_latency
+            min_time = pending.time_since() + time_offset
+        # print(f'{immediate=} {min_time=}')
+
+        if pending.lateness > lateness_margin:
+            backoff = pending.time_since() + pending.lateness/2
+            if backoff > min_time:
+                min_time = backoff
+                print(f'set {min_time=} due to lateness')
 
         # if max_time < min_time, exclude input instruments
         input_late = max_time is not None and max_time < min_time
@@ -763,10 +805,11 @@ def main(
             inst_weights = {}
             mc = max(counts.values()) if len(counts) else 0
             for i in allowed_insts:
-                # if i in counts:
-                inst_weights[i] = np.exp(max(0, mc - counts[i] - n_margin))
-                # else:
-                    # inst_weights[i] = 1.
+                # don't upweight player controlled instruments though
+                if i in mode_insts('auto'):
+                    inst_weights[i] = np.exp(max(0, mc - counts[i] - n_margin))
+                else:
+                    inst_weights[i] = 1.
 
         # print(f'{inst_weights=}')
 
@@ -800,7 +843,7 @@ def main(
 
         try:
             with profile('\tquery_method', print=print, enable=profiler>1):
-                pending.event = query_method(
+                pending.set(query_method(
                     note_on_map, note_off_map,
                     min_time=min_time, max_time=max_t,
                     truncate_quantile_time=tqt,
@@ -810,16 +853,12 @@ def main(
                     steer_density=steer_density,
                     inst_weights=inst_weights,
                     no_steer=mode_insts(('input','follow'), allow_muted=False),
-                )
+                ))
         except Exception as e:
             print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
             print(e.args)
             print(repr(e.__traceback__))
-            pending.event = None
-
-
-        # display the predicted event
-        tui.defer(prediction=pending.event)
+            pending.clear()
 
     #### MIDI handling
 
@@ -972,10 +1011,9 @@ def main(
 
         # feed event to Notochord
         # with profile('feed', print=print, enable=profiler):
-        play_event(
-            {'inst':inst, 'pitch':pitch, 'vel':vel}, 
-            channel=channel, send=thru, tag='PLAYER')
-
+        # with lock:
+        pending.set({'inst':inst, 'pitch':pitch, 'vel':vel})
+        play_event(channel=channel, send=thru, tag='PLAYER')
         # query for new prediction
         auto_query(immediate=True)
 
@@ -983,6 +1021,7 @@ def main(
         # if testing: midi.cc(control=3, value=msg.note, channel=15)
 
     def auto_event():
+        # print('auto_event')
         # 'auto' event happens:
         event = pending.event
         inst, pitch, vel = event['inst'], event['pitch'], math.ceil(event['vel'])
@@ -995,72 +1034,46 @@ def main(
             auto_query()
             return
         
-        play_event(event, channel=chan, tag='NOTO')
+        play_event(channel=chan, tag='NOTO')
 
-    def get_dt():
-        return (pending.event['time'] 
-                if pending.event is not None 
-                else float('inf'))
-    # TODO: this is making the TUI sluggish when tick > interval
-    # guessing the GIL prevents UI thread from running if the repeat thread
-    # is always spinning
-    # then the UI only gets to run when the repeat thread goes into torch code
-    # so if there's nothing for torch to do, but it's still checking every ms,
-    # and tick is 5ms, it is spinning the whole time
-    # is there a way to spin lock but release GIL...?
-    # does that make sense?
-    # alternatively, could return a larger interval here as appropriate
-    # BUT that might break things if query is called from outside here...
-    # could compromise tho, and return something like 10ms
-    # causing queries from outside repeat to have mild jitter,
-    # while spinning still happens 
-    # @repeat(1e-3, lock=True, tick=None)
-    # def _():
-    #     """Loop, checking if predicted next event happens"""
-    #     # check if current prediction has passed
-    #     # print(dt, stopwatch.read())
-    #     while (
-    #     # if (
-    #         follow_status['depth']==0 and
-    #         not testing and
-    #         pending.gate and
-    #         stopwatch.read() > get_dt()
-    #         ):
-    #         # if so, check if it is a notochord-controlled instrument
-    #         if pending.event['inst'] in mode_insts('auto'):
-    #             # prediction happens
-    #             with profile('auto_event', print=print, enable=profiler):
-    #                 auto_event()
-    #         # query for new prediction
-    #         if get_dt() < noto.max_dt and not debug_query:
-    #         # if not debug_query:
-    #             with profile('auto_query', print=print, enable=profiler):
-    #                 auto_query()
-    @repeat(1e-3, lock=True)
+    @repeat(lock=True)
     def _():
         """Loop, checking if predicted next event happens"""
         # check if current prediction has passed
-        # print(get_dt(), stopwatch.read())
+        time_until = pending.time_until()
+        # print(f'''
+        #     {follow_status["depth"]=},
+        #     {not testing=},
+        #     {pending.gate=},
+        #     {time_until=}''')
         if (
             follow_status['depth']==0 and
             not testing and
             pending.gate and
-            stopwatch.read() > get_dt()
+            pending.event and
+            # stopwatch.read() > get_dt()
+            time_until <= 0
             ):
             # if so, check if it is a notochord-controlled instrument
-            if pending.event['inst'] in mode_insts('auto'):
+            if pending.is_auto():
                 # prediction happens
                 with profile('auto_event', print=print, enable=profiler):
                     auto_event()
+                immediate = True
+            else:
+                immediate = False
             # query for new prediction
             # if get_dt() < noto.max_dt and not debug_query:
             if not debug_query:
                 with profile('auto_query', print=print, enable=profiler):
-                    auto_query(immediate=True)
+                    auto_query(immediate=immediate)
         # adaptive time resolution here -- yield to other threads when 
         # next event is not expected, but time precisely when next event
         # is imminent
-        return max(0, min(10e-3, get_dt() - stopwatch.read()))
+        wait = pending.time_until() if pending.is_auto() else 10e-3
+        r = max(0, min(10e-3, wait))
+        # print('wait', r)
+        return r
 
     @cleanup
     def _():
@@ -1132,8 +1145,8 @@ def main(
             # release held notes
             for note in history.notes:
                 if note.chan==c:
+                    pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
                     play_event(
-                        dict(inst=note.inst, pitch=note.pitch, vel=0),
                         channel=note.chan, 
                         tag='NOTO', memo='mode change')
 
@@ -1154,8 +1167,8 @@ def main(
         # for (chan,inst,pitch) in history.note_triples:
         for note in history.notes:
             if note.chan==c and config[note.chan]['mode']!='input':
+                pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
                 play_event(
-                    dict(inst=note.inst, pitch=note.pitch, vel=0),
                     channel=note.chan, 
                     tag='NOTO', memo='change instrument')
         # send pc if appropriate
@@ -1177,8 +1190,8 @@ def main(
             # for (chan,inst,pitch) in history.note_triples:
             for note in history.notes:
                 if note.chan==c and config[c]['mode']!='input':
+                    pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
                     play_event(
-                        dict(inst=note.inst, pitch=note.pitch, vel=0),
                         channel=note.chan, 
                         tag='NOTO', memo='mute channel')
         else:
