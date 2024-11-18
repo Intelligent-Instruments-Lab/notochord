@@ -338,7 +338,7 @@ class Notochord(nn.Module):
         # hardcoded for now
         return 289 if self.is_drum(inst) else 257
     
-    def feed(self, inst, pitch, time, vel, **kw):
+    def feed(self, inst:int, pitch:int, time:Number, vel:Number, **kw):
         """consume an event and advance hidden state
         
         Args:
@@ -1172,7 +1172,8 @@ class Notochord(nn.Module):
         self.feed(inst, pitch, time, vel)
         return self.query(**kw)
 
-    def feed_query(self, inst, pitch, time, vel, **kw):
+    def feed_query(self, inst:int, pitch:int, time:Number, vel:Number, 
+ **kw):
         """
         feed an event to the model, 
         then query for the next predicted event and return it.
@@ -1189,7 +1190,9 @@ class Notochord(nn.Module):
         self.feed(r['inst'], r['pitch'], r['time'], r['vel'])
         return r
 
-    def feed_query_feed(self, inst, pitch, time, vel, **kw):
+    def feed_query_feed(self, 
+            inst:int, pitch:int, time:Number, vel:Number, 
+            **kw):
         """
         given an event, return the next predicted event, 
         feeding both to the model.
@@ -1197,15 +1200,24 @@ class Notochord(nn.Module):
         self.feed(inst, pitch, time, vel)
         return self.query_feed(**kw)
     
-    def reset(self, start=True):
+    def reset(self, start=None, state=None):
         """
         resets internal model state.
         Args:
             start: if True, send start tokens through the model
+                default behavior is True when state=None, False otherwise
+            state: set the state from a result of `get_state`,
+                instead of the initial state
         """
         self.step = 0
+        if start is None:
+            start = state is None
+        if state is None: 
+            named_states = zip(self.cell_state_names(), self.initial_state)
+        else:
+            named_states = state.items()
         with torch.inference_mode():
-            for n,t in zip(self.cell_state_names(), self.initial_state):
+            for n,t in named_states:
                 getattr(self, n)[:] = t
             if start:
                 self.feed(
@@ -1215,6 +1227,11 @@ class Notochord(nn.Module):
         # if start:
         #     self.feed(
         #         self.instrument_start_token, self.pitch_start_token, 0., 0.)
+
+    def get_state(self) -> Dict[str, torch.Tensor]:
+        """return a dict of {str:Tensor} representing the model state"""
+        return {n:getattr(self, n).clone() for n in self.cell_state_names()}
+                
 
     @classmethod
     def user_data_dir(cls):

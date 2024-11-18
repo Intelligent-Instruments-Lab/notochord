@@ -56,6 +56,7 @@ import numpy as np
 import toml_file
 import mido
 from tqdm import tqdm
+import joblib
 
 import torch
 torch.set_num_threads(1)
@@ -350,7 +351,7 @@ def main(
     try:
         noto = Notochord.from_checkpoint(checkpoint)
         noto.eval()
-        noto.feed(0,0,0,0)
+        noto.feed(0,0,0,0) # smoke test
         noto.query()
         noto.reset()
     except Exception:
@@ -358,7 +359,11 @@ def main(
         raise
 
     ### this feeds all events from the prompt file to notochord
-    config_ingest = ingest_midi(midi_prompt, noto)
+    if midi_prompt is None:
+        initial_state = None
+        config_ingest = None
+    else:
+        initial_state, config_ingest = ingest_midi(midi_prompt, checkpoint, noto)
 
     # TODO: config from CLI > config from preset file > channel defaults
     #       warn if preset is overridden by config
@@ -557,6 +562,9 @@ def main(
             tag=None, memo=None):
         """realize an event as MIDI, terminal display, and Notochord update"""
         event = pending.event
+        if event is None:
+            print("WARNING: play_event on null event")
+            return
         time_until = pending.time_until()
         pending.lateness = -time_until # set at the time of playing
         if time_until < -0.1:
@@ -678,7 +686,7 @@ def main(
                     tag='NOTO', memo='reset')
                 
         # reset notochord state
-        noto.reset()
+        noto.reset(state=initial_state)
         # reset history
         history.push()
 
@@ -1183,21 +1191,29 @@ def main(
         if update:
             update_config()
 
+    @lock
     def set_mute(c, b, update=True):
+        config[c]['mute'] = b
         if b:
             print(f'mute channel {c}')
             # release held notes
             # for (chan,inst,pitch) in history.note_triples:
+            ended_any = False
             for note in history.notes:
+                print(f'held {note=}')
                 if note.chan==c and config[c]['mode']!='input':
                     pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
                     play_event(
                         channel=note.chan, 
                         tag='NOTO', memo='mute channel')
+                    ended_any = True
+            if pending.gate:
+                auto_query(immediate=ended_any)
         else:
             print(f'unmute channel {c}')
+            if pending.gate:
+                auto_query()
 
-        config[c]['mute'] = b
         if update:
             update_config()
 
@@ -1569,10 +1585,11 @@ def inst_label(i):
     return f'{i:03d} \n{gm_names[i]}'
 ### end def TUI components###
 
-
-def ingest_midi(midi_file, noto):
+mem = joblib.Memory(Notochord.user_data_dir())
+@mem.cache(ignore=('noto',))
+def ingest_midi(midi_file, checkpoint, noto): # checkpoint name used for cache
     ### read MIDI file
-    # TODO: deduplicate this code
+    # TODO: deduplicate this code?
     class AnonTracks:
         def __init__(self):
             self.n = 0
@@ -1582,54 +1599,52 @@ def ingest_midi(midi_file, noto):
     next_anon = AnonTracks()
     mid_channel_inst = defaultdict(next_anon)
 
-    if midi_file is not None:
-        mid = mido.MidiFile(midi_file)
-        ticks_per_beat = mid.ticks_per_beat
-        us_per_beat = 500_000
-        time_seconds = 0
-        prev_time_seconds = 0
-        event_count = defaultdict(int)
-        print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
-        # if len(mid.tracks) > 1:
-            # print('WARNING: only first track of midi prompt will be read')
-        for msg in tqdm(mid, desc='ingesting MIDI prompt'):#.tracks[0]:
-            # when iterating over a track this is ticks,
-            # when iterating the whole file it's seconds
-            time_seconds += msg.time# * us_per_beat / ticks_per_beat / 1e6
+    mid = mido.MidiFile(midi_file)
+    ticks_per_beat = mid.ticks_per_beat
+    us_per_beat = 500_000
+    time_seconds = 0
+    prev_time_seconds = 0
+    event_count = defaultdict(int)
+    print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
+    # if len(mid.tracks) > 1:
+        # print('WARNING: only first track of midi prompt will be read')
+    for msg in tqdm(mid, desc='ingesting MIDI prompt'):#.tracks[0]:
+        # when iterating over a track this is ticks,
+        # when iterating the whole file it's seconds
+        time_seconds += msg.time# * us_per_beat / ticks_per_beat / 1e6
 
-            if msg.type=='program_change':
-                mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
-                tqdm.write(str(msg))
-                
-            elif msg.type=='set_tempo':
-                us_per_beat = msg.tempo
-                tqdm.write(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
-                
-            elif msg.type in ('note_on', 'note_off'):
-                # make channel 10 with no PC standard drumkit
-                if msg.channel not in mid_channel_inst and msg.channel==9:
-                    mid_channel_inst[msg.channel] = 129
+        if msg.type=='program_change':
+            mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
+            tqdm.write(str(msg))
+            
+        elif msg.type=='set_tempo':
+            us_per_beat = msg.tempo
+            tqdm.write(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
+            
+        elif msg.type in ('note_on', 'note_off'):
+            # make channel 10 with no PC standard drumkit
+            if msg.channel not in mid_channel_inst and msg.channel==9:
+                mid_channel_inst[msg.channel] = 129
 
-                event_count[mid_channel_inst[msg.channel]] += 1
-                noto.feed(
-                    mid_channel_inst[msg.channel],
-                    msg.note,
-                    time_seconds - prev_time_seconds,
-                    msg.velocity if msg.type=='note_on' else 0)
-                prev_time_seconds = time_seconds
+            event_count[mid_channel_inst[msg.channel]] += 1
+            noto.feed(
+                mid_channel_inst[msg.channel],
+                msg.note,
+                time_seconds - prev_time_seconds,
+                msg.velocity if msg.type=='note_on' else 0)
+            prev_time_seconds = time_seconds
 
-            else: continue
+        else: continue
 
-        print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
-        # print(event_count)
-        # print(mid_channel_inst)
-        
-        config = {
-            c+1:{'inst':i, 'mode':'auto', 'mute':False} 
-            for c,i in mid_channel_inst.items()}
-        
-        return config
-
+    print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
+    # print(event_count)
+    # print(mid_channel_inst)
+    
+    config = {
+        c+1:{'inst':i, 'mode':'auto', 'mute':False} 
+        for c,i in mid_channel_inst.items()}
+    
+    return noto.get_state(), config
 
 if __name__=='__main__':
     run(main)

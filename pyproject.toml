@@ -16,6 +16,7 @@ sf2utils = "^0.9"
 appdirs = "^1.4.4"
 iipyper = {path = "../iipyper", develop = true}
 toml-file = "^1.0.5"
+joblib = "^1.4.2"
 
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.5.3"

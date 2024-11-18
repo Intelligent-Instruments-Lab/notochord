@@ -85,7 +85,7 @@ def main(host="127.0.0.1", receive_port=9999, send_port=None,
     def _(address, a:Splat[4], **kw):
         """
         /notochord/feed_query {feed arguments} {query arguments}
-            feed and event, then query for the next in one call
+            feed an event, then query for the next in one call
         """
         print(f"{address} {a} {kw}")
         r = predictor.feed_query(*a, **kw) 
