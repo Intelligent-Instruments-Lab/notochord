@@ -82,6 +82,7 @@ def main(
     preset_file:Path=None,
 
     midi_prompt:Path=None,
+    prompt_instruments:bool=True,
 
     initial_mute=False, # start with Notochord muted
     initial_query=False, # let Notochord start playing immediately
@@ -196,6 +197,8 @@ def main(
 
         midi_prompt:
             path to a MIDI file to read in as a prompt
+        prompt_instruments:
+            if True, set unmuted instruments to those in the prompt file
 
         initial_mute: 
             start 'auto' voices muted so it won't play with input.
@@ -364,6 +367,8 @@ def main(
         config_ingest = None
     else:
         initial_state, config_ingest = ingest_midi(midi_prompt, checkpoint, noto)
+        if not prompt_instruments:
+            config_ingest = None
 
     # TODO: config from CLI > config from preset file > channel defaults
     #       warn if preset is overridden by config
@@ -404,7 +409,7 @@ def main(
     validate_config()
 
     # for c,v in config.items():
-    #     tui.set_inst(c, v['inst'])
+        # tui.set_inst(c, v['inst'])
 
     def mode_insts(t, allow_muted=True):
         if isinstance(t, str):
@@ -1585,6 +1590,7 @@ def inst_label(i):
     return f'{i:03d} \n{gm_names[i]}'
 ### end def TUI components###
 
+# TODO: move this into Notochord class
 mem = joblib.Memory(Notochord.user_data_dir())
 @mem.cache(ignore=('noto',))
 def ingest_midi(midi_file, checkpoint, noto): # checkpoint name used for cache
