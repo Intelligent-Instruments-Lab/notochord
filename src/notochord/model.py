@@ -1,10 +1,16 @@
 import math
 from typing import List, Tuple, Dict, Union, Any
 from numbers import Number
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from pathlib import Path
+import hashlib
+import json
 
+import mido
+from tqdm import tqdm
+import appdirs
 import numpy as np
+import joblib
 
 import torch
 from torch import nn
@@ -26,6 +32,13 @@ class Query:
 
 Range = namedtuple('Range', ('lo', 'hi', 'weight'), defaults=(-torch.inf, torch.inf, 1))
 Subset = namedtuple('Subset', ('values', 'weight'), defaults=(None, 1))
+
+def _user_data_dir():
+    d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
+    d.mkdir(exist_ok=True, parents=True)
+    return d
+
+mem = joblib.Memory(_user_data_dir())
 
 class SineEmbedding(nn.Module):
     def __init__(self, n, hidden, w0=1e-3, w1=10, scale='log'):
@@ -234,6 +247,8 @@ class Notochord(nn.Module):
                 masks for training
         """
         batch_size, batch_len = pitches.shape
+
+        self.checkpoint_path = None
 
         # embed data to input vectors
         inst_emb = self.instrument_emb(instruments) # batch, time, emb_size
@@ -1235,10 +1250,7 @@ class Notochord(nn.Module):
 
     @classmethod
     def user_data_dir(cls):
-        import appdirs
-        d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
-        d.mkdir(exist_ok=True, parents=True)
-        return d
+        return _user_data_dir()
 
     @classmethod
     def from_checkpoint(cls, path):
@@ -1273,5 +1285,92 @@ class Notochord(nn.Module):
         checkpoint = torch.load(path, map_location=torch.device('cpu'))
         model = cls(**checkpoint['kw']['model'])
         model.load_state_dict(checkpoint['model_state'], strict=False)
+        model.checkpoint_path = path
         return model
-        
+    
+    def prompt(self, midi_file):
+        """Read a MIDI file and feed events to this Notochord model.
+
+        When possible, the hidden states will be cached so re-using the same prompt will be fast.
+
+        Args:
+            midi_file: path of a midi file to read
+        Returns:
+            state: hidden state dict of the Notochord encoding the MIDI prompt
+            channel_inst: dict mapping MIDI channel (0-index) to Notochord instrument (1-256)
+        """
+        return prompt(self, midi_file, state_hash=hash_states(self.get_state()))
+    
+def hash_states(s):
+    if isinstance(s, dict):
+        return {k:hash_states(v) for k,v in s.items()}
+    elif isinstance(s, torch.Tensor):
+        return hash_tensor(s)
+    return s
+
+def hash_tensor(t):
+    return hashlib.md5(json.dumps(t.tolist()).encode('utf-8')).digest()
+
+@mem.cache(ignore=('noto',))
+def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None): 
+    # checkpoint name used for disk cache
+    """Read a MIDI file and feed events to a Notochord model.
+
+    Args:
+        noto: a Notochord
+        midi_file: path of a midi file to read
+        state_hash: representation of model hidden state to use for caching results
+    Returns:
+        state: hidden state dict of the Notochord encoding the MIDI prompt
+        channel_inst: dict mapping MIDI channel (0-index) to Notochord instrument (1-256)
+    """
+    # TODO: deduplicate this code?
+    class AnonTracks:
+        def __init__(self):
+            self.n = 0
+        def __call__(self):
+            self.n += 1
+            return 256+self.n
+    next_anon = AnonTracks()
+    mid_channel_inst = defaultdict(next_anon)
+
+    mid = mido.MidiFile(midi_file)
+    ticks_per_beat = mid.ticks_per_beat
+    us_per_beat = 500_000
+    time_seconds = 0
+    prev_time_seconds = 0
+    event_count = defaultdict(int)
+    print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
+
+    for msg in tqdm(mid, desc='ingesting MIDI prompt'):
+        # when iterating over a track this is ticks,
+        # when iterating the whole file it's seconds
+        time_seconds += msg.time
+
+        if msg.type=='program_change':
+            mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
+            tqdm.write(str(msg))
+            
+        elif msg.type=='set_tempo':
+            us_per_beat = msg.tempo
+            tqdm.write(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
+            
+        elif msg.type in ('note_on', 'note_off'):
+            # make channel 10 with no PC standard drumkit
+            if msg.channel not in mid_channel_inst and msg.channel==9:
+                mid_channel_inst[msg.channel] = 129
+
+            event_count[mid_channel_inst[msg.channel]] += 1
+            noto.feed(
+                mid_channel_inst[msg.channel],
+                msg.note,
+                time_seconds - prev_time_seconds,
+                msg.velocity if msg.type=='note_on' else 0)
+            prev_time_seconds = time_seconds
+
+        else: continue
+
+    print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
+    # print(event_count)
+    # print(mid_channel_inst)  
+    return noto.get_state(), dict(mid_channel_inst)

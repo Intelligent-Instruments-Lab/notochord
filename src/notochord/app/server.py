@@ -12,17 +12,31 @@ import numpy as np
 from time import time
 
 def main(host="127.0.0.1", receive_port=9999, send_port=None, 
-        checkpoint="notochord-latest.ckpt"):
+        checkpoint="notochord-latest.ckpt", prompt=None):
     osc = OSC(host, receive_port)
+
+    initial_state = None
 
     if checkpoint is not None:
         predictor = Notochord.from_checkpoint(checkpoint)
         predictor.eval()
         predictor.reset()
         print('notochord created')
+        if prompt is not None:
+            initial_state, _ = predictor.prompt(prompt)
     else:
         predictor = None
  
+    @osc.handle('/notochord/prompt', return_port=send_port)
+    def _(address, midi_file:str, **kw):
+        """
+        load a MIDI file from a path and run it through the Notochord model.
+        the hidden state after the prompt becomes the new reset state.
+        """
+        nonlocal initial_state
+        print(f"{address} {midi_file} {kw}")
+        initial_state, _ = predictor.prompt(midi_file, **kw)
+
     @osc.handle('/notochord/feed', return_port=send_port)
     def _(address, a:Splat[4], **kw):
         """
@@ -98,12 +112,12 @@ def main(host="127.0.0.1", receive_port=9999, send_port=None,
     def _(address, **kw):
         """
         /notochord/reset
-            reset the model and prime it with start-of-sequence token
+            reset the model to the last prompted state, or else prime it with start-of-sequence token
         /notochord/reset "start" false
             reset the model without sending a start token
         """
         print(f"{address} {kw}")
-        predictor.reset(**kw) 
+        predictor.reset(state=initial_state, **kw) 
 
     @osc.handle('/notochord/load', 
                 return_port=send_port)

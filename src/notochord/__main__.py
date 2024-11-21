@@ -15,6 +15,7 @@ def help():
         improviser: run the Notochord improviser TUI
         txalaparta: run the txalaparta app
         morse: run the morse code app
+        prompt: run a MIDI file through a notochord model and cache hidden states
         train: train a Notochord model (GPU recommended)
         files: show the location of Notochord models and config files on disk
     """)
@@ -40,6 +41,9 @@ def _main():
         if sys.argv[1] == 'morse':
             sys.argv = sys.argv[1:]
             run(morse)
+        if sys.argv[1] == 'prompt':
+            fire.Fire(prompt, sys.argv[2:])
+            return
         if sys.argv[1] == 'train':
             from notochord.train import Resumable
             fire.Fire(Resumable, sys.argv[1:])
