@@ -962,7 +962,7 @@ def main(
                 arg = a[0]
                 assert isinstance(arg, Number)
                 lo, hi = ctrl.get('range', (0,1))   
-                controls[name] = min(hi, max(0, arg))
+                controls[name] = min(hi, max(lo, arg))
                 print(f"{name}={controls[name]}")
 
             if route in action_osc:
