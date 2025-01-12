@@ -30,8 +30,24 @@ class Query:
     def __repr__(self):
         return f"{self.modality} \n{self.then}"# {self.kw}"
 
-Range = namedtuple('Range', ('lo', 'hi', 'weight'), defaults=(-torch.inf, torch.inf, 1))
-Subset = namedtuple('Subset', ('values', 'weight'), defaults=(None, 1))
+# Range = namedtuple('Range', ('lo', 'hi', 'weight'), defaults=(-torch.inf, torch.inf, 1))
+# Subset = namedtuple('Subset', ('values', 'weight'), defaults=(None, 1))
+
+class Range:
+    def __init__(self, lo=-torch.inf, hi=torch.inf, weight=1, sample_lo=None, sample_hi=None):
+        """use lo, hi when computing weights of each branch; but actually sample from sample_lo and sample_hi. for example, you could let lo,hi be the full range of noteOn velocities to compute the true model on/off ratio, but sample from a narrow range of possible velocities"""
+        self.lo = lo
+        self.hi = hi
+        self.weight = weight
+        self.sample_lo = lo if sample_lo is None else sample_lo
+        self.sample_hi = hi if sample_hi is None else sample_hi
+
+class Subset:
+    def __init__(self, values=None, weight=1, sample_values=None):
+        self.values = values
+        self.weight = weight
+        self.sample_values = values if sample_values is None else sample_values
+
 
 def _user_data_dir():
     d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
@@ -518,7 +534,7 @@ class Notochord(nn.Module):
                     idx = 0
                 s,action = sq[idx]
                 # sample from range
-                result = sample(params, whitelist=s.values, **query.kw)
+                result = sample(params, whitelist=s.sample_values, **query.kw)
 
             elif m in ('time', 'vel'):
                 # print(f'{m=}')
@@ -538,7 +554,7 @@ class Notochord(nn.Module):
                     idx = 0
                 r,action = sq[idx]
                 # sample from range
-                result = sample(params, truncate=(r.lo, r.hi), **query.kw)
+                result = sample(params, truncate=(r.sample_lo, r.sample_hi), **query.kw)
 
             if not result.isfinite().all():
                 print('WARNING: nonfinite value {result=} {m=}')
@@ -632,6 +648,7 @@ class Notochord(nn.Module):
             note_on_map:Dict[int,List[int]], 
             note_off_map:Dict[int,List[int]], 
             min_time=None, max_time=None, 
+            min_vel=None, max_vel=None, 
             rhythm_temp=None, timing_temp=None,
             truncate_quantile_time=None,
             truncate_quantile_pitch=None,
@@ -672,15 +689,19 @@ class Notochord(nn.Module):
         
         w_on = 0 if no_on else w
         w_off = 0 if no_off else 1/w
+
+        min_vel = max(0.5, 0 if min_vel is None else min_vel)
+        max_vel = torch.inf if max_vel is None else max_vel
         
         return self.deep_query(Query('vel', [
             (Range(-torch.inf,0.5,w_off), get_subquery(note_off_map, 'note off')),
-            (Range(0.5,torch.inf,w_on), get_subquery(note_on_map, 'note on', inst_weights))
+            (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery(note_on_map, 'note on', inst_weights))
         ]))
     
     def query_vipt(self,
         note_on_map, note_off_map,
         min_time=None, max_time=None, 
+        min_vel=None, max_vel=None, 
         rhythm_temp=None, timing_temp=None,
         truncate_quantile_time=None,
         truncate_quantile_pitch=None,
@@ -723,10 +744,13 @@ class Notochord(nn.Module):
         
         w_on = 0 if no_on else w
         w_off = 0 if no_off else 1/w
+
+        min_vel = max(0.5, 0 if min_vel is None else min_vel)
+        max_vel = torch.inf if max_vel is None else max_vel
         
         return self.deep_query(Query('vel', [
             (Range(-torch.inf,0.5,w_off), get_subquery(note_off_map, 'note off')),
-            (Range(0.5,torch.inf,w_on), get_subquery(note_on_map, 'note on', inst_weights))
+            (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery(note_on_map, 'note on', inst_weights))
         ]))
     
     # def query_ipvt(self,

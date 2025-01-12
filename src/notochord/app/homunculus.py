@@ -43,6 +43,7 @@ it in your file explorer."""
 # TODO: MIDI learn
 
 import time
+import traceback
 import shutil
 from typing import Optional, Dict, Any
 from numbers import Number
@@ -102,6 +103,9 @@ def main(
     max_note_len=5, # in seconds, to auto-release stuck Notochord notes
     max_time=None, # max time between events
     nominal_time=True, #DEPRECATED
+
+    min_vel=None, #mininum velocity (besides noteOffs)
+    max_vel=None, # maximum velocity
 
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
@@ -448,7 +452,7 @@ def main(
         for k,v in config.items():
             if v['inst']==i:
                 return k
-        raise ValueError
+        return None
     def channel_followers(chan):
         # return channel of all 'follow' voices with given source
         return [
@@ -549,14 +553,18 @@ def main(
         kind = 'note_on' if velocity > 0 else 'note_off'
         cfg = config[channel]
         # get channel note map
-        if 'note_map' in cfg:
-            note_map = cfg['note_map']
-        else:
-            note_map = {}
+        note_map = cfg.get('note_map', {})
         if note in note_map:
             note = note_map[note]
         elif 'note_shift' in cfg:
-            note = note + cfg['note_shift']
+            note = note - cfg['note_shift']
+
+        if note < 0:
+            print('WARNING: dropped note < 0')
+            return
+        if note >= 128:
+            print('WARNING: dropped note >= 128')
+            return
 
         port = cfg.get('port', None)
 
@@ -853,6 +861,23 @@ def main(
             if i in held_notes
         }
 
+        # polyphony constraints
+        # prevent note on if polyphony exceeded
+        for i in list(note_on_map):
+            c = auto_inst_channel(i)
+            if c is None: continue
+            cfg = config[c]
+            if len(held_notes[i]) >= cfg.get('poly', [0, np.inf])[1]:
+                note_on_map.pop(i)
+
+        for i in list(note_off_map):
+            c = auto_inst_channel(i)
+            if c is None: continue
+            cfg = config[c]
+            if cfg is None: continue
+            if len(held_notes[i]) <= cfg.get('poly', [0, np.inf])[0]:
+                note_off_map.pop(i)
+
         # print(note_on_map, note_off_map)
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
@@ -862,6 +887,7 @@ def main(
                 pending.set(query_method(
                     note_on_map, note_off_map,
                     min_time=min_time, max_time=max_t,
+                    min_vel=min_vel, max_vel=max_vel,
                     truncate_quantile_time=tqt,
                     truncate_quantile_pitch=tqp,
                     rhythm_temp=rhythm_temp,
@@ -873,7 +899,8 @@ def main(
         except Exception as e:
             print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
             print(e.args)
-            print(repr(e.__traceback__))
+            # print(repr(e.__traceback__))
+            traceback.print_tb(e.__traceback__, file=tui)
             pending.clear()
 
     #### MIDI handling
@@ -1001,9 +1028,7 @@ def main(
         #         midi.send(msg, port=port, channel=channel+1)
 
         inst = channel_inst(channel)
-        pitch = msg.note
-        if 'note_shift' in cfg:
-            pitch = pitch + cfg['note_shift']
+        pitch = msg.note + cfg.get('note_shift', 0)
         vel = msg.velocity if msg.type=='note_on' else 0
         
         dt = input_sw.punch()
@@ -1042,6 +1067,8 @@ def main(
         event = pending.event
         inst, pitch, vel = event['inst'], event['pitch'], math.ceil(event['vel'])
         chan = auto_inst_channel(inst)
+        if chan is None:
+            raise ValueError(f"channel not found for instrument {inst}")
 
         # note on which is already playing or note off which is not
 
@@ -1094,10 +1121,11 @@ def main(
     @cleanup
     def _():
         """end any remaining notes"""
-        # print(f'cleanup: {notes=}')
+        print(f'cleanup: {history.notes=}')
         for note in history.notes:
             if note.inst in mode_insts(('auto', 'follow')):
-                midi.note_off(note=note.pitch, velocity=0, channel=note.chan-1)
+                # midi.note_off(note=note.pitch, velocity=0, channel=note.chan-1)
+                send_midi(note=note.pitch, velocity=0, channel=note.chan)
                 # midi.note_on(note=note.pitch, velocity=0, channel=note.chan-1)
 
     ### update_* keeps the UI in sync with the state

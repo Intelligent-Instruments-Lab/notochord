@@ -219,6 +219,14 @@ class CensoredMixtureLogistic(nn.Module):
         Returns:
             Tensor[*shape,...] (h without last dimension, prepended with `shape`)
         """
+        if truncate is None:
+            truncate = (-torch.inf, torch.inf)
+        # early out in the single possibility case
+        if truncate[0] == truncate[1]:
+            return torch.tensor(
+                [truncate[0]]*shape if shape is not None else truncate[0])
+        truncate = torch.tensor(truncate)
+
         if shape is None:
             unwrap = True
             shape = 1
@@ -229,9 +237,6 @@ class CensoredMixtureLogistic(nn.Module):
             # draw k samples
             shape = shape * quantile_k
 
-        if truncate is None:
-            truncate = (-torch.inf, torch.inf)
-        truncate = torch.tensor(truncate)
 
         if component_temp is None:
             component_temp = 1
