@@ -549,6 +549,7 @@ def main(
             s += f' ({memo})'
         tui.defer(note=s)
 
+    _last_sent_vel = [-1]*16
     def send_midi(note, velocity, channel):
         kind = 'note_on' if velocity > 0 else 'note_off'
         cfg = config[channel]
@@ -565,10 +566,27 @@ def main(
         if note >= 128:
             print('WARNING: dropped note >= 128')
             return
-
+        
         port = cfg.get('port', None)
 
-        midi.send(kind, note=note, velocity=velocity, channel=channel-1, port=port)
+        # this converts velocity to CC stop activations
+        # for the organ in Fríkirkjan
+        if velocity > 0 and 'frikirkjan_velcc' in cfg:
+            ccs = cfg['frikirkjan_velcc']
+            n = len(ccs)
+            thresh = [int(128/n*i) for i in range(n)]
+            last = _last_sent_vel[channel]
+            for cc,t in zip(ccs, thresh):
+                if last < t and velocity >= t:
+                    # send stop on
+                    midi.cc(control=cc, channel=channel-1, port=port)
+                if last >= t and velocity < t:
+                    # send stop off
+                    midi.cc(control=cc+1, channel=channel-1, port=port)
+            _last_sent_vel[channel] = velocity
+
+        midi.send(
+            kind, note=note, velocity=velocity, channel=channel-1, port=port)
 
     def play_event(
             channel, 
