@@ -43,6 +43,7 @@ it in your file explorer."""
 # TODO: MIDI learn
 
 import time
+import random
 import traceback
 import shutil
 from typing import Optional, Dict, Any
@@ -95,6 +96,10 @@ def main(
     dump_midi=False, # print all incoming MIDI
     suppress_midi_feedback=True,
     input_channel_map=None,
+
+    stop_on_end=True,
+    reset_on_end=False,
+    end_exponent=1, # < 1 makes end more likely, >1 less likely
 
     balance_sample=False, # choose instruments which have played less recently
     n_recent=32, # number of recent note-on events to consider for above
@@ -505,6 +510,7 @@ def main(
             self.last_event_time = None
             self.next_event_time = None
             self.lateness = 0
+            self.cum_end_prob = 0
             tui.defer(prediction=None)
         def occurred(self):
             self.event = None
@@ -531,6 +537,14 @@ def main(
             if self.event is None:
                 return False
             return self.event['inst'] in mode_insts('auto')
+        def sample_end(self):
+            if self.event is None:
+                return False
+            end_prob = self.event.get('end', 0) ** end_exponent
+            # cumulative end probability
+            self.cum_end_prob = 1 - (1-self.cum_end_prob)*(1-end_prob)
+            # print(f'{self.cum_end_prob=}')
+            return random.random() < end_prob
     pending = Prediction()    
 
     # tracks held notes, recently played instruments, etc
@@ -1094,8 +1108,22 @@ def main(
             print(f're-query for invalid {vel=}, {inst=}, {pitch=}')
             auto_query()
             return
-        
+                
+        do_reset = False
+        if (stop_on_end or reset_on_end) and pending.sample_end():
+            print('END')
+            # pending.clear()
+            if stop_on_end:
+                pending.gate = False
+            if reset_on_end:
+                do_reset = True # needs to happen after final event plays
+                # pending.clear()
+                # noto_reset()
+
         play_event(channel=chan, tag='NOTO')
+
+        if do_reset:
+            noto_reset()
 
     @repeat(lock=True)
     def _():
@@ -1417,7 +1445,7 @@ class NotoPrediction(Static):
         if evt is None:
             s = ''
         else:
-            s = f"\tinstrument: {evt['inst']:3d}    pitch: {evt['pitch']:3d}    time: {int(evt['time']*1000):4d} ms    velocity:{int(evt['vel']):3d}"
+            s = f"\tinstrument: {evt['inst']:3d}    pitch: {evt['pitch']:3d}    time: {int(evt['time']*1000):4d} ms    velocity:{int(evt['vel']):3d}     end: {evt['end']:.5f}"
         self.update(Panel(s, title='prediction'))
 
 class Mixer(Static):
