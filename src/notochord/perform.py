@@ -53,7 +53,7 @@ class NotoPerformance:
     """
     def __init__(self):
         self.init()
-        self._notes:Dict[Tuple[int,int,int], Any] = {} 
+        self._notes:Dict[Note, Any] = {} 
         self.past_segments:List[pd.DataFrame] = []
 
     def init(self):

@@ -97,8 +97,8 @@ def main(
     suppress_midi_feedback=True,
     input_channel_map=None,
 
-    stop_on_end=True,
-    reset_on_end=False,
+    stop_on_end=True, # auto channels stop when end is sampled
+    reset_on_end=False, # reset notochord when end is sampled
     end_exponent=1, # < 1 makes end more likely, >1 less likely
 
     balance_sample=False, # choose instruments which have played less recently
@@ -114,6 +114,9 @@ def main(
 
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
+
+    punch_in=False, # EXPERIMENTAL. this causes all channels to switch between auto and input mode when input is received or not
+    punch_out_after=1.0, # time in seconds from last input to revert to auto
 
     use_tui=True, # run textual UI
     predict_input=True, # forecasted next events can be for input (preserves model distribution, but can lead to Notochord deciding not to play)
@@ -783,6 +786,7 @@ def main(
             predict_input=predict_input, 
             predict_follow=predict_follow,
             immediate=False):
+
         # check for stuck notes
         # and prioritize ending those
         for (_, inst, pitch), note_data in history.note_data.items():
@@ -901,7 +905,7 @@ def main(
             cfg = config[c]
             if len(held_notes[i]) >= cfg.get('poly', [0, np.inf])[1]:
                 note_on_map.pop(i)
-
+        # prevent note off if below minimum polyphony
         for i in list(note_off_map):
             c = auto_inst_channel(i)
             if c is None: continue
@@ -1041,6 +1045,10 @@ def main(
         channel = msg.channel + 1
         # convert from 0-index
         channel = input_channel_map.get(channel, channel)
+
+        if punch_in:
+            set_mode(channel, 'input')
+
         cfg = config[channel]
 
         if channel not in mode_chans('input'):
@@ -1125,6 +1133,21 @@ def main(
         if do_reset:
             noto_reset()
 
+    def maybe_punch_out():
+        none_held = set(mode_chans('input'))
+        for c,_,_ in history.notes:
+            if c in none_held:
+                none_held.remove(c)
+
+        evt = history.events
+        recent_events = evt[evt.wall_time_ns > time.time_ns() - punch_out_after*1e9]
+        for c in none_held:
+            # print(recent_events.channel)
+            # print(f'{c=} {(c not in recent_events.channel)=}')
+            if c not in recent_events.channel.values:
+                set_mode(c, 'auto')
+
+
     @repeat(lock=True)
     def _():
         """Loop, checking if predicted next event happens"""
@@ -1151,11 +1174,17 @@ def main(
                 immediate = True
             else:
                 immediate = False
+
+            if punch_in:
+                maybe_punch_out()
+
             # query for new prediction
             # if get_dt() < noto.max_dt and not debug_query:
             if not debug_query:
                 with profile('auto_query', print=print, enable=profiler):
                     auto_query(immediate=immediate)
+
+
         # adaptive time resolution here -- yield to other threads when 
         # next event is not expected, but time precisely when next event
         # is imminent
