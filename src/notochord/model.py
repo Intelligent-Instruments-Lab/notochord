@@ -1310,6 +1310,8 @@ class Notochord(nn.Module):
         model = cls(**checkpoint['kw']['model'])
         model.load_state_dict(checkpoint['model_state'], strict=False)
         model.checkpoint_path = path
+        model.reset()
+        model.eval()
         return model
     
     def prompt(self, midi_file):
