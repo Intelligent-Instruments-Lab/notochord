@@ -30,12 +30,11 @@ class Query:
     def __repr__(self):
         return f"{self.modality} \n{self.then}"# {self.kw}"
     
-# Range = namedtuple('Range', ('lo', 'hi', 'weight'), defaults=(-torch.inf, torch.inf, 1))
-# Subset = namedtuple('Subset', ('values', 'weight'), defaults=(None, 1))
-
+# TODO: refactor use of Range into a 'cases' keyword, rather than a 'then' case
+# add case index to the event
 class Range:
     def __init__(self, lo=-torch.inf, hi=torch.inf, weight=1, sample_lo=None, sample_hi=None):
-        """use lo, hi when computing weights of each branch; but actually sample from sample_lo and sample_hi. for example, you could let lo,hi be the full range of noteOn velocities to compute the true model on/off ratio, but sample from a narrow range of possible velocities"""
+        """use lo, hi when computing weights of each branch; but actually sample between sample_lo and sample_hi. for example, you could let lo,hi cover the full range to compute the true model on/off ratio, but sample from a narrow range of allowed velocities in the noteOn case"""
         self.lo = lo
         self.hi = hi
         self.weight = weight
@@ -48,27 +47,11 @@ class Subset:
         self.weight = weight
         self.sample_values = values if sample_values is None else sample_values
 
-def range_intersection(*args):
-    lo = -torch.inf
-    hi = torch.inf
-    for pair in args:
-        if pair is None: continue
-        l,h = pair
-        if l is not None:
-            lo = max(lo,l)
-        if h is not None:
-            hi = min(hi,h)
-    if lo>hi: lo = hi # configure this?
-    return lo, hi
-
-def range_subtract(r, v):
-    lo, hi = r
-    if v is not None:
-        if lo is not None:
-            lo = lo - v
-        if hi is not None:
-            hi = hi - v
-    return lo, hi
+def get_from_scalar_or_dict(x, default=None):
+    if isinstance(x, dict):
+        return lambda i: x.get(i, default)
+    else:
+        return lambda _: default if x is None else x
 
 def _user_data_dir():
     d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
@@ -742,10 +725,11 @@ class Notochord(nn.Module):
         ]))
     
     def query_vipt(self,
-        note_on_map, note_off_map,
-        inst_dur_ranges=None, # {i:(lo,hi)} allowed range of durations per instrument
+        note_on_map=None, note_off_map=None,
         min_time=None, max_time=None, 
         min_vel=None, max_vel=None, 
+        min_polyphony=None, max_polyphony=None, # scalar or per instrument
+        min_duration=None, max_duration=None, # scalar or per instrument
         rhythm_temp=None, timing_temp=None,
         truncate_quantile_time=None,
         truncate_quantile_pitch=None,
@@ -764,41 +748,75 @@ class Notochord(nn.Module):
         """
         min_time = min_time or 0
         max_time = max_time or torch.inf
-        # illegal note offs:
-        #   the soonest possible note-off is later than the latest possible event
-        def get_soonest(i,p):
-            lo = min_time
-            # lo is the min remaining duration for the predicted note, offs only
-            dur_range = inst_dur_ranges.get(i)
-            if dur_range is None:
-                return lo
-            min_dur, _ = dur_range
-            if min_dur is None:
-                return lo
-            lo = max(lo, min_dur - self.held_notes.get((i,p)))
-            return lo
+
+        # convert {(i,p):t} to {i:[p]}
+        held_map = {}
+        for i,p in self.held_notes:
+            if i not in held_map:
+                held_map[i] = set()
+            held_map[i].add(p)
+
+        # get default note_on_map (anything)
+        if note_on_map is None:
+            note_on_map = {
+                i:range(128) for i in range(1,self.instrument_domain+1)}
+            
+        # note offs can be any from the note_on instruments by default
+        # but users can also supply this themselves
+        if note_off_map is None:
+            note_off_map = {
+                i: held_map[i] 
+                for i in note_on_map 
+                if i in held_map}
+            
+        # exclude held notes for note on
+        for i in held_map:
+            note_on_map[i] = set(note_on_map[i]) - held_map[i]
+
+        # exclude non-held notes for note off
+        note_off_map = {
+            i: set(note_off_map[i]) & held_map[i]
+            for i in note_off_map
+            if i in held_map
+        }
+
+        # TODO: break out application of these constraints to helper functions;
+        # allow breaking each constraint when it results in no options
+
+        max_poly = get_from_scalar_or_dict(max_polyphony, torch.inf)
+        min_poly = get_from_scalar_or_dict(min_polyphony, 0)
+
+        # prevent note on if polyphony exceeded
+        for i in list(note_on_map):
+            if len(held_map.get(i, [])) >= max_poly(i):
+                note_on_map.pop(i)
+
+        # prevent note off if below minimum polyphony
+        for i in list(note_off_map):
+            if len(held_map[i]) <= min_poly(i):
+                note_off_map.pop(i)
+
+        max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
+        min_dur = get_from_scalar_or_dict(min_duration, 0)
+
         soonest_off = {
-            (i,p):get_soonest(i,p) 
+            (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
             for i,ps in note_off_map.items()
             for p in ps}
         
         # latest possible event is minimum max remaining duration over all held notes  
-        latest = max_time
+        latest_event = max_time
         for (i,p),t in self.held_notes.items():
-            dur_range = inst_dur_ranges.get(i)
-            if dur_range is None:
-                continue
-            _, max_dur = dur_range
-            if max_dur is None:
-                continue
-            latest = min(latest, max_dur - t)
+            latest_event = min(latest_event, max_dur(i) - t)
         # slip to accomodate global constraint
-        latest = max(min_time, latest)
+        latest_event = max(min_time, latest_event)
 
+        # illegal note offs:
+        #   the soonest possible note-off is later than the latest possible event
         new_note_off_map = {}
         for i,ps in note_off_map.items():
             for p in ps:
-                if soonest_off[(i,p)] <= latest:
+                if soonest_off[(i,p)] <= latest_event:
                     if i not in new_note_off_map:
                         new_note_off_map[i] = []
                     new_note_off_map[i].append(p)
@@ -817,29 +835,42 @@ class Notochord(nn.Module):
             note_off_map = old_note_off_map
             no_off = no_off_old
             for k in soonest_off:
-                soonest_off[k] = latest
+                soonest_off[k] = latest_event
+
+        def note_map(e):
+            if e['vel'] > 0:
+                m = note_on_map
+            else:
+                m = note_off_map
+            i = e.get('inst')
+            if i is not None:
+                m = m[i]
+            return m
               
-        def get_subquery(note_map, path, weights=None):
-            return Query(
+        def get_subquery():
+            return lambda e: Query(
                 'inst', 
                 whitelist={
-                    k:1 if weights is None else weights.get(k,1) 
-                    for k in note_map},
+                    k:inst_weights.get(k,1) if e['vel'] > 0 else 1 
+                    for k in note_map(e)},
                 then=lambda e: Query(
                     'pitch', 
-                    whitelist=note_map[e['inst']],
+                    whitelist=note_map(e),
                     truncate_quantile=(
                         None if self.is_drum(e['inst']) 
                         else truncate_quantile_pitch),
                     then=lambda e: Query(
-                        'time', path,         
+                        'time', 'note on' if e['vel']>0 else 'note off',         
                         truncate=(
                             min_time if e['vel']>0 
                             else soonest_off[(e['inst'],e['pitch'])],
-                            latest
+                            latest_event
                         ),
-                        truncate_quantile=None if (no_steer is not None and e['inst'] in no_steer) else truncate_quantile_time,
-                        weight_top_p=rhythm_temp, component_temp=timing_temp
+                        truncate_quantile=None if (
+                            no_steer is not None and e['inst'] in no_steer
+                            ) else truncate_quantile_time,
+                        weight_top_p=rhythm_temp, 
+                        component_temp=timing_temp
                     )
                 )
             )
@@ -853,8 +884,8 @@ class Notochord(nn.Module):
         max_vel = torch.inf if max_vel is None else max_vel
         
         return self.deep_query(Query('vel', [
-            (Range(-torch.inf,0.5,w_off), get_subquery(note_off_map, 'note off')),
-            (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery(note_on_map, 'note on', inst_weights))
+            (Range(-torch.inf,0.5,w_off), get_subquery()),
+            (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery())
         ]))
     
     # def query_ipvt(self,

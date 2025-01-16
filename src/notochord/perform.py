@@ -52,9 +52,9 @@ class NotoPerformance:
         * currently playing notes as {inst: pitches}
     """
     def __init__(self):
-        self.init()
         self._notes:Dict[Note, Any] = {} 
         self.past_segments:List[pd.DataFrame] = []
+        self.init()
 
     def init(self):
         self.events = pd.DataFrame(np.array([],dtype=[
@@ -65,6 +65,7 @@ class NotoPerformance:
             ('vel',np.int8), # MIDI velocity
             ('channel',np.int8), # MIDI channel
             ]))
+        self._notes.clear()
         
     def push(self):
         """push current events onto a list of past segments,

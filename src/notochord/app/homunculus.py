@@ -869,45 +869,54 @@ def main(
         # use only currently selected instruments
         inst_pitch_map = inst_ranges(allowed_insts)
         note_on_map = {
-            i: set(inst_pitch_map[i])-set(held_notes[i]) # exclude held notes
+            i: set(inst_pitch_map[i])#-set(held_notes[i]) # exclude held notes
             for i in allowed_insts#allowed_insts
             if i in inst_pitch_map
         }
-        # use any instruments which are currently holding notes
-        note_off_map = {
-            i: set(held_notes[i]) # only held notes
-            for i in allowed_insts
-            if i in held_notes
-        }
+        # # use any instruments which are currently holding notes
+        # note_off_map = {
+        #     i: set(held_notes[i]) # only held notes
+        #     for i in allowed_insts
+        #     if i in held_notes
+        # }
 
         # polyphony constraints
         # prevent note on if polyphony exceeded
-        for i in list(note_on_map):
+        # for i in list(note_on_map):
+        #     c = auto_inst_channel(i)
+        #     if c is None: continue
+        #     cfg = config[c]
+        #     if len(held_notes[i]) >= cfg.get('poly', [0, np.inf])[1]:
+        #         note_on_map.pop(i)
+        # # prevent note off if below minimum polyphony
+        # for i in list(note_off_map):
+        #     c = auto_inst_channel(i)
+        #     if c is None: continue
+        #     cfg = config[c]
+        #     if cfg is None: continue
+        #     if len(held_notes[i]) <= cfg.get('poly', [0, np.inf])[0]:
+        #         note_off_map.pop(i)
+
+        min_polyphony = {}
+        max_polyphony = {}
+        for i in note_on_map:
             c = auto_inst_channel(i)
             if c is None: continue
             cfg = config[c]
-            if len(held_notes[i]) >= cfg.get('poly', [0, np.inf])[1]:
-                note_on_map.pop(i)
-        # prevent note off if below minimum polyphony
-        for i in list(note_off_map):
-            c = auto_inst_channel(i)
-            if c is None: continue
-            cfg = config[c]
-            if cfg is None: continue
-            if len(held_notes[i]) <= cfg.get('poly', [0, np.inf])[0]:
-                note_off_map.pop(i)
+            if cfg is not None and 'poly' in cfg:
+                min_polyphony[i], max_polyphony[i] = cfg['poly']
 
         # print(note_on_map, note_off_map)
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
-
         try:
             with profile('\tquery_method', print=print, enable=profiler>1):
                 pending.set(query_method(
-                    note_on_map, note_off_map,
-                    inst_dur_ranges={i:(0.05,0.06) for i in range(321)},###DEBUG
-                    # inst_dur_ranges={i:(3.0,3.01) for i in range(321)},###DEBUG
+                    note_on_map, #note_off_map,
+                    min_duration=0.1, max_duration=0.11,###DEBUG
+                    # min_duration=1, max_duration=1.01,###DEBUG
+                    min_polyphony=min_polyphony, max_polyphony=max_polyphony,
                     min_time=min_time, max_time=max_t,
                     min_vel=min_vel, max_vel=max_vel,
                     truncate_quantile_time=tqt,
@@ -919,10 +928,13 @@ def main(
                     no_steer=mode_insts(('input','follow'), allow_muted=False),
                 ))
         except Exception as e:
-            print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
-            print(e.args)
+            # print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
+            print(f'WARNING: query failed. {allowed_insts=} {note_on_map=}')
+            print(f'{noto.held_notes=}')
+            # print(e.args)
             # print(repr(e.__traceback__))
-            traceback.print_tb(e.__traceback__, file=tui)
+            # traceback.print_tb(e.__traceback__, file=tui)
+            traceback.print_exc(file=tui)
             pending.clear()
 
     #### MIDI handling
