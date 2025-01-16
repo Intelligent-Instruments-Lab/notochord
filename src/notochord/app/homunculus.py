@@ -577,10 +577,10 @@ def main(
             note = note - cfg['note_shift']
 
         if note < 0:
-            print('WARNING: dropped note < 0')
+            print(f'WARNING: dropped note < 0 ({note}, {channel=})')
             return
         if note >= 128:
-            print('WARNING: dropped note >= 128')
+            print(f'WARNING: dropped note >= 128 ({note}, {channel=})')
             return
 
         port = cfg.get('port', None)
@@ -857,12 +857,13 @@ def main(
 
         # VTIP is better for time interventions,
         # VIPT is better for instrument interventions
-        if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
-            # print('VTIP')
-            query_method = noto.query_vtip
-        else:
-            # print('VIPT')
-            query_method = noto.query_vipt
+        # if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
+        #     # print('VTIP')
+        #     query_method = noto.query_vtip
+        # else:
+        #     # print('VIPT')
+        #     query_method = noto.query_vipt
+        query_method = noto.query_vipt ### DEBUG
 
         # print(f'considering {insts} for note_on')
         # use only currently selected instruments
@@ -900,10 +901,13 @@ def main(
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
+
         try:
             with profile('\tquery_method', print=print, enable=profiler>1):
                 pending.set(query_method(
                     note_on_map, note_off_map,
+                    inst_dur_ranges={i:(0.05,0.06) for i in range(321)},###DEBUG
+                    # inst_dur_ranges={i:(3.0,3.01) for i in range(321)},###DEBUG
                     min_time=min_time, max_time=max_t,
                     min_vel=min_vel, max_vel=max_vel,
                     truncate_quantile_time=tqt,

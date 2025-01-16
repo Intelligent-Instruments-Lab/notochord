@@ -29,7 +29,7 @@ class Query:
         self.kw = kw
     def __repr__(self):
         return f"{self.modality} \n{self.then}"# {self.kw}"
-
+    
 # Range = namedtuple('Range', ('lo', 'hi', 'weight'), defaults=(-torch.inf, torch.inf, 1))
 # Subset = namedtuple('Subset', ('values', 'weight'), defaults=(None, 1))
 
@@ -48,6 +48,27 @@ class Subset:
         self.weight = weight
         self.sample_values = values if sample_values is None else sample_values
 
+def range_intersection(*args):
+    lo = -torch.inf
+    hi = torch.inf
+    for pair in args:
+        if pair is None: continue
+        l,h = pair
+        if l is not None:
+            lo = max(lo,l)
+        if h is not None:
+            hi = min(hi,h)
+    if lo>hi: lo = hi # configure this?
+    return lo, hi
+
+def range_subtract(r, v):
+    lo, hi = r
+    if v is not None:
+        if lo is not None:
+            lo = lo - v
+        if hi is not None:
+            hi = hi - v
+    return lo, hi
 
 def _user_data_dir():
     d = Path(appdirs.user_data_dir('Notochord', 'IIL'))
@@ -153,6 +174,10 @@ class Notochord(nn.Module):
         """
         """
         super().__init__()
+
+        self.step = 0
+        self.current_time = 0
+        self.held_notes = {}
 
         self.note_dim = 4 # instrument, pitch, time, velocity
 
@@ -388,6 +413,23 @@ class Notochord(nn.Module):
             **kw: ignored (allows doing e.g. noto.feed(**noto.query(...)))
         """
         # print(f'FEED from {threading.get_ident()}') 
+        # print('feed', inst, pitch, time, vel)
+
+        # track elapsed time and ongoing notes
+        key = (inst,pitch)
+        for k in self.held_notes:
+            self.held_notes[k] += time
+        self.current_time += time
+        self.step += 1
+
+        if vel > 0:
+            self.held_notes[key] = 0
+        elif key in self.held_notes:
+            self.held_notes.pop(key)
+
+        # print(self.held_notes)
+
+        # update RNN state
 
         with torch.inference_mode():
             inst = torch.LongTensor([[inst]]) # 1x1 (batch, time)
@@ -409,7 +451,6 @@ class Notochord(nn.Module):
 
             self.h_query = None
             
-            self.step += 1
 
 
     # TODO: add end prediction to deep_query
@@ -439,6 +480,8 @@ class Notochord(nn.Module):
         return event
     
     def _deep_query(self, query, hidden, event):
+        if hasattr(query, '__call__'):
+            query = query(event)
         m = query.modality
         sq = query.then
         try:
@@ -477,7 +520,7 @@ class Notochord(nn.Module):
 
         with torch.inference_mode():
             #
-            if sq is None or isinstance(sq, str) or isinstance(sq, Query):
+            if sq is None or isinstance(sq, str) or isinstance(sq, Query) or hasattr(sq, '__call__'):
                 # print(f'{m=} (simple)')
                 # this is the final query (sq is None or a path tag)
                 # or there are no cases, just proceed to next subquery
@@ -567,7 +610,7 @@ class Notochord(nn.Module):
 
             # print(f'{result=}')
             # embed, add to hidden, recurse into subquery
-            if isinstance(action, Query):
+            if isinstance(action, Query) or hasattr(action, '__call__'):
                 emb = embed(result)
                 hidden = hidden + emb
                 if (~hidden.isfinite()).any():
@@ -700,6 +743,7 @@ class Notochord(nn.Module):
     
     def query_vipt(self,
         note_on_map, note_off_map,
+        inst_dur_ranges=None, # {i:(lo,hi)} allowed range of durations per instrument
         min_time=None, max_time=None, 
         min_vel=None, max_vel=None, 
         rhythm_temp=None, timing_temp=None,
@@ -718,26 +762,86 @@ class Notochord(nn.Module):
                 note_on_map: possible note-ons as {instrument: [pitch]} 
                 note_off_map: possible note-offs as {instrument: [pitch]} 
         """
+        min_time = min_time or 0
+        max_time = max_time or torch.inf
+        # illegal note offs:
+        #   the soonest possible note-off is later than the latest possible event
+        def get_soonest(i,p):
+            lo = min_time
+            # lo is the min remaining duration for the predicted note, offs only
+            dur_range = inst_dur_ranges.get(i)
+            if dur_range is None:
+                return lo
+            min_dur, _ = dur_range
+            if min_dur is None:
+                return lo
+            lo = max(lo, min_dur - self.held_notes.get((i,p)))
+            return lo
+        soonest_off = {
+            (i,p):get_soonest(i,p) 
+            for i,ps in note_off_map.items()
+            for p in ps}
+        
+        # latest possible event is minimum max remaining duration over all held notes  
+        latest = max_time
+        for (i,p),t in self.held_notes.items():
+            dur_range = inst_dur_ranges.get(i)
+            if dur_range is None:
+                continue
+            _, max_dur = dur_range
+            if max_dur is None:
+                continue
+            latest = min(latest, max_dur - t)
+        # slip to accomodate global constraint
+        latest = max(min_time, latest)
+
+        new_note_off_map = {}
+        for i,ps in note_off_map.items():
+            for p in ps:
+                if soonest_off[(i,p)] <= latest:
+                    if i not in new_note_off_map:
+                        new_note_off_map[i] = []
+                    new_note_off_map[i].append(p)
+        old_note_off_map = note_off_map
+        note_off_map = new_note_off_map
+
         no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
+        no_off_old = all(len(ps)==0 for ps in old_note_off_map.values())
+
         if no_on and no_off:
-            raise ValueError(f"""
-                no possible notes {note_on_map=} {note_off_map=}""")
-        
+            if no_off_old:
+                raise ValueError(f"""
+                    no possible notes {note_on_map=} {note_off_map=}""")
+            # let the duration constraint slip
+            note_off_map = old_note_off_map
+            no_off = no_off_old
+            for k in soonest_off:
+                soonest_off[k] = latest
+              
         def get_subquery(note_map, path, weights=None):
             return Query(
                 'inst', 
-                then=[(Subset([i], 1 if weights is None else weights[i]), Query(
+                whitelist={
+                    k:1 if weights is None else weights.get(k,1) 
+                    for k in note_map},
+                then=lambda e: Query(
                     'pitch', 
-                    whitelist=list(ps), 
-                    truncate_quantile=None if self.is_drum(i) else truncate_quantile_pitch,
-                    then=Query(
+                    whitelist=note_map[e['inst']],
+                    truncate_quantile=(
+                        None if self.is_drum(e['inst']) 
+                        else truncate_quantile_pitch),
+                    then=lambda e: Query(
                         'time', path,         
-                        truncate=(min_time or -torch.inf, max_time or torch.inf), 
-                        truncate_quantile=None if (no_steer is not None and i in no_steer) else truncate_quantile_time,
+                        truncate=(
+                            min_time if e['vel']>0 
+                            else soonest_off[(e['inst'],e['pitch'])],
+                            latest
+                        ),
+                        truncate_quantile=None if (no_steer is not None and e['inst'] in no_steer) else truncate_quantile_time,
                         weight_top_p=rhythm_temp, component_temp=timing_temp
                     )
-                )) for i,ps in note_map.items() if len(ps)]
+                )
             )
         
         w = 1 if steer_density is None else 2**(steer_density*2-1)
@@ -1235,7 +1339,7 @@ class Notochord(nn.Module):
         """
         given an event, return the next predicted event, 
         feeding both to the model.
-        """
+        """ 
         self.feed(inst, pitch, time, vel)
         return self.query_feed(**kw)
     
@@ -1248,6 +1352,8 @@ class Notochord(nn.Module):
             state: set the state from a result of `get_state`,
                 instead of the initial state
         """
+        self.current_time = 0
+        self.held_notes.clear()
         self.step = 0
         if start is None:
             start = state is None

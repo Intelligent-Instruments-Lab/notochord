@@ -38,15 +38,19 @@ def reweight_top_p(probs, top_p):
 
 def categorical_sample(
         logits, whitelist=None, index=None, top_p=None, 
-        truncate_quantile=None,
+        truncate_quantile=None
         ):
+    """if whitelist is a dictionary, it maps to weights"""
     # if logits.isnan().any():
     #     raise Exception('start '+str(logits))
 
     if whitelist is not None:
-        preserve_logits = logits[...,whitelist]
+        idx = list(whitelist)
+        preserve_logits = logits[...,idx]
+        if isinstance(whitelist, dict):
+            preserve_logits += torch.tensor(list(whitelist.values())).log()
         logits = torch.full_like(logits, -torch.inf)
-        logits[..., whitelist] = preserve_logits
+        logits[..., idx] = preserve_logits
 
     if index is not None:
         return logits.argsort(-1, True)[..., index]
