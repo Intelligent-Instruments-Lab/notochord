@@ -23,7 +23,10 @@ from .distributions import CensoredMixtureLogistic, categorical_sample
 from .util import arg_to_set, download_url
 
 class Query:
-    def __init__(self, modality, then=None, **kw):
+    def __init__(self, modality, cases=None, value=None, then=None, **kw):
+        assert (cases is None) or (value is None)
+        self.cases = cases
+        self.value = value
         self.modality = modality
         self.then = then
         self.kw = kw
@@ -434,9 +437,6 @@ class Notochord(nn.Module):
 
             self.h_query = None
             
-
-
-    # TODO: add end prediction to deep_query
     def deep_query(self, query, predict_end=True):
         """flexible querying with nested Query objects.
         see query_vtip for an example.
@@ -444,21 +444,20 @@ class Notochord(nn.Module):
         Args:
             query: Query object
         """
-        if self.h_query is None:
-            with torch.inference_mode():
+        with torch.inference_mode():
+            if self.h_query is None:
                 self.h_query = self.h_proj(self.h)
-        event = self._deep_query(
-            query, hidden=self.h_query[:,0], event={})
-        
-        if predict_end:
-            # print('END')
-            # print(f'{self.h}')
-            with torch.inference_mode():
+            event = self._deep_query(
+                query, hidden=self.h_query[:,0], event={})
+            
+            if predict_end:
+                # print('END')
+                # print(f'{self.h}')
                 end_params = self.end_proj(self.h)
                 event['end'] = end_params.softmax(-1)[...,1].item()
                 # event['end'] = D.Categorical(logits=end_params).sample().item()
-        else:
-            event['end'] = 0#torch.zeros(self.h.shape[:-1])
+            else:
+                event['end'] = 0#torch.zeros(self.h.shape[:-1])
 
         return event
     
@@ -475,133 +474,76 @@ class Notochord(nn.Module):
         project = self.projections[idx]
         embed = self.embeddings[idx]
 
-        if m=='time':
-            dist = self.time_dist
-            sample = dist.sample
-        elif m=='vel':
-            dist = self.vel_dist
-            sample = dist.sample
+        if query.value is not None:
+            result = torch.tensor(query.value)
         else:
-            sample = categorical_sample
+            if m=='time':
+                dist = self.time_dist
+                sample = dist.sample
+            elif m=='vel':
+                dist = self.vel_dist
+                sample = dist.sample
+            else:
+                sample = categorical_sample
 
-        # Query.then can be:
+            params = project(hidden.tanh())
 
-        # None (no further sub-queries)
-        # or str (no further sub-queries, set the 'path' property of the event)
-
-        # Query describing what to do next
-
-        # pair of Number, Query
-        # setting a deterministic value for the current query,
-        # and the query to execute next
-
-        # list of Range, Query pairs
-        # or list of Subset, Query pairs
-        #    describing what to do next given where the sampled value falls
-        #    Range and Subset can also carry weights
-
-
-        with torch.inference_mode():
-            #
-            if sq is None or isinstance(sq, str) or isinstance(sq, Query) or hasattr(sq, '__call__'):
-                # print(f'{m=} (simple)')
-                # this is the final query (sq is None or a path tag)
-                # or there are no cases, just proceed to next subquery
-                action = sq
-                params = project(hidden.tanh())
+            if query.cases is None:
                 result = sample(params, **query.kw)
-
-            elif len(sq)==0:
-                raise ValueError(f"subquery has no cases: {sq}")
-            
-            # deterministic single value cases
-            # elif len(sq)==1 and len(sq[0])==3 and isinstance(sq[0][0], Number):
-            #     # singleton list case
-            #     key, action = sq[0]
-            #     result = key
-            elif len(sq)==2 and isinstance(sq[0], Number):
-                # print(f'{m=} ({key=})')
-                # bare pair case
-                key, action = sq
-                result = key
-
             elif m in ('inst', 'pitch'):
-                # print(f'{m=}')
-
                 # weighted subsets case
-                try:
-                    assert all(isinstance(s, Subset) for s,_ in sq)
-                except Exception:
-                    raise ValueError(f"""
-                    subqueries should all be Subset, Query tuples here: {sq}
-                    """)
-
-                # if (~hidden.isfinite()).any():
-                #     raise Exception('hidden '+str(hidden))
-                
-                params = project(hidden.tanh())
-
-                # if (~params.isfinite()).any():
-                    # raise Exception('params '+str(params))
-
-                 # sample subset
-                if len(sq) > 1:
+                assert all(isinstance(s, Subset) for s in query.cases), query.cases
+                if len(query.cases) > 1:
                     all_probs = params.softmax(-1)
                     probs = [
                         all_probs[...,s.values].sum(-1) * s.weight
-                        for s,_ in sq]
-                    
-                    # if (~torch.tensor(probs).log().isfinite()).any():
-                        # raise Exception('subset '+str(probs))
-                    
-                    # print(f'deep_query {m} {sq=} {probs=}')
+                        for s in query.cases]
                     idx = categorical_sample(torch.tensor(probs).log())
                 else:
                     idx = 0
-                s,action = sq[idx]
-                # sample from range
-                result = sample(params, whitelist=s.sample_values, **query.kw)
-
-            elif m in ('time', 'vel'):
-                # print(f'{m=}')
-                # weighted ranges case
-                assert all(isinstance(r, Range) for r,_ in sq)
-
-                params = project(hidden.tanh())
-                # sample range
-                if len(sq) > 1:
+                # sample from subset
+                # TODO: handle case where user supplies cases and whitelist
+                result = sample(
+                    params, whitelist=query.cases[idx].sample_values, **query.kw)
+            else:
+                # weiighted ranges case
+                assert all(isinstance(r, Range) for r in query.cases), query.cases
+                if len(query.cases) > 1:
                     probs = [
                         (dist.cdf(params, r.hi) - dist.cdf(params, r.lo)
                         ) * r.weight
-                        for r,_ in sq]
+                        for r in query.cases]
                     # print(f'deep_query {m} {probs=}')
                     idx = categorical_sample(torch.tensor(probs).log())
                 else:
                     idx = 0
-                r,action = sq[idx]
+                r = query.cases[idx]
                 # sample from range
-                result = sample(params, truncate=(r.sample_lo, r.sample_hi), **query.kw)
+                # TODO: handle case where user supplies cases and truncate
+                result = sample(
+                    params, truncate=(r.sample_lo, r.sample_hi), **query.kw)
 
-            if not result.isfinite().all():
-                print('WARNING: nonfinite value {result=} {m=}')
-                result.nan_to_num_(0)
 
-            try:
-                event[m] = result.item()
-            except Exception:
-                event[m] = result
+        if not result.isfinite().all():
+            print('WARNING: nonfinite value {result=} {m=}')
+            result.nan_to_num_(0)
 
-            # print(f'{result=}')
-            # embed, add to hidden, recurse into subquery
-            if isinstance(action, Query) or hasattr(action, '__call__'):
-                emb = embed(result)
-                hidden = hidden + emb
-                if (~hidden.isfinite()).any():
-                    raise Exception(f'{m=} {result=} {emb=}')
-                return self._deep_query(action, hidden, event)
-            else:
-                event['path'] = action
-                return event
+        try:
+            event[m] = result.item()
+        except Exception:
+            event[m] = result
+
+        # print(f'{result=}')
+        # embed, add to hidden, recurse into subquery
+        if isinstance(query.then, Query) or hasattr(query.then, '__call__'):
+            emb = embed(result)
+            hidden = hidden + emb
+            if (~hidden.isfinite()).any():
+                raise Exception(f'{m=} {result=} {emb=}')
+            return self._deep_query(query.then, hidden, event)
+        else:
+            event['path'] = query.then
+            return event
             
     def query_tipv_onsets(self,
         min_time=None, max_time=None, 
@@ -724,10 +666,13 @@ class Notochord(nn.Module):
             (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery(note_on_map, 'note on', inst_weights))
         ]))
     
+    # TODO: should be possible to implement velocity steering now
+    # need syntax for keywords to vary by case;
+    # then can put truncate_quantile in the noteon case
     def query_vipt(self,
         note_on_map=None, note_off_map=None,
-        min_time=None, max_time=None, 
-        min_vel=None, max_vel=None, 
+        min_time=None, max_time=None, # affecting intervent time (not durations)
+        min_vel=None, max_vel=None, # affecting note on only
         min_polyphony=None, max_polyphony=None, # scalar or per instrument
         min_duration=None, max_duration=None, # scalar or per instrument
         rhythm_temp=None, timing_temp=None,
@@ -848,9 +793,21 @@ class Notochord(nn.Module):
             if i is not None:
                 m = m[i]
             return m
-              
-        def get_subquery():
-            return lambda e: Query(
+                    
+        w = 1 if steer_density is None else 2**(steer_density*2-1)
+        
+        w_on = 0 if no_on else w
+        w_off = 0 if no_off else 1/w
+
+        min_vel = max(0.5, 0 if min_vel is None else min_vel)
+        max_vel = torch.inf if max_vel is None else max_vel
+        
+        return self.deep_query(Query(
+            'vel', 
+            cases=(
+                Range(-torch.inf,0.5,w_off), 
+                Range(0.5,torch.inf,w_on,min_vel,max_vel)),
+            then=lambda e: Query(
                 'inst', 
                 whitelist={
                     k:inst_weights.get(k,1) if e['vel'] > 0 else 1 
@@ -862,7 +819,7 @@ class Notochord(nn.Module):
                         None if self.is_drum(e['inst']) 
                         else truncate_quantile_pitch),
                     then=lambda e: Query(
-                        'time', 'note on' if e['vel']>0 else 'note off',         
+                        'time', #'note on' if e['vel']>0 else 'note off',         
                         truncate=(
                             min_time if e['vel']>0 
                             else soonest_off[(e['inst'],e['pitch'])],
@@ -873,22 +830,7 @@ class Notochord(nn.Module):
                             ) else truncate_quantile_time,
                         weight_top_p=rhythm_temp, 
                         component_temp=timing_temp
-                    )
-                )
-            )
-        
-        w = 1 if steer_density is None else 2**(steer_density*2-1)
-        
-        w_on = 0 if no_on else w
-        w_off = 0 if no_off else 1/w
-
-        min_vel = max(0.5, 0 if min_vel is None else min_vel)
-        max_vel = torch.inf if max_vel is None else max_vel
-        
-        return self.deep_query(Query('vel', [
-            (Range(-torch.inf,0.5,w_off), get_subquery()),
-            (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery())
-        ]))
+        )))))
     
     # def query_ipvt(self,
     #     note_map, 
