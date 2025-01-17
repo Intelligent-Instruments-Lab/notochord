@@ -914,7 +914,7 @@ def main(
             with profile('\tquery_method', print=print, enable=profiler>1):
                 pending.set(query_method(
                     note_on_map, #note_off_map,
-                    min_duration=0.1, max_duration=0.11,###DEBUG
+                    # min_duration=0.1, max_duration=0.11,###DEBUG
                     # min_duration=1, max_duration=1.01,###DEBUG
                     min_polyphony=min_polyphony, max_polyphony=max_polyphony,
                     min_time=min_time, max_time=max_t,
@@ -1229,7 +1229,6 @@ def main(
 
         if initial_query:
             auto_query(predict_input=False, predict_follow=False)
-
 
     ### set_* does whatever necessary to change channel properties
     ### calls update_config() to keep the UI in sync

@@ -749,6 +749,8 @@ class Notochord(nn.Module):
         min_time = min_time or 0
         max_time = max_time or torch.inf
 
+        inst_weights = inst_weights or {}
+
         # convert {(i,p):t} to {i:[p]}
         held_map = {}
         for i,p in self.held_notes:
