@@ -376,6 +376,16 @@ def main(
         dts = torch.tensor([dts])*dit_dur
 
         with torch.inference_mode():
+            # NOTE: would it be better to break apart the query?
+            # condition on instrument, then sample velocity with constraint, 
+            # then do the special sampling for time here,
+            # then condition pitch on time
+            # as it is i *think* it will do time last,
+            # but should verify that.
+            # should be possible to implement this using the new deep_query?
+            # i.e. get the LM probs and pass them as weights for time Ranges
+            # this would remove some flexibility in combine_probs though...
+            # would also need to be able to pass in a 'case temperature' to deep query
             event = noto.query(return_params=True, **query)
 
             dt_breaks = torch.tensor([
@@ -397,8 +407,6 @@ def main(
             if verbose > 1:
                 print(f'      noto prob [1u, 3u, 7u] {noto_dt_probs}')
             # 1: char continues; 3,7: end of char
-            # here, the 3,7 probs only need to add up correctly (hence prob/2)
-            # we'll check the LM again only if the token ends
             lm_dt_probs = [S.morse_tree.children_prob(), S.morse_tree.prob]
             if verbose > 1:
                 print(f'      LM prob [{S.morse_tree.children_chars()}, {S.morse_tree.char}] {lm_dt_probs}')
