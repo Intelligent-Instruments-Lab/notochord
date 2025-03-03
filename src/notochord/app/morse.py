@@ -9,6 +9,7 @@ Authors:
 import random
 # from copy import deepcopy
 import warnings
+import logging
 
 import rich
 from rich.text import Text
@@ -73,7 +74,9 @@ def main(
     if send_pc:
         do_send_pc(noto_channel, noto_inst)
 
+
     print(f'loading language model {lm}')
+    logging.disable()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tokenizer = AutoTokenizer.from_pretrained(lm)
@@ -86,7 +89,10 @@ def main(
     alphabet = set(alphabet)
     # indices of within-vocab tokens
     token_idx = [
-        i for i,t in enumerate(tokens) if all(c in alphabet for c in t)]
+        i for i,t in enumerate(tokens) 
+        if all(c in alphabet for c in t)
+        and '  ' not in t
+        ]
     tokens = [tokens[i] for i in token_idx]
     # token_node_index maps tokens directly to tree nodes for speed
     token_root, token_node_index = TokenNode.make_tree(tokens)
@@ -471,8 +477,8 @@ def main(
 
         late = now() - S.next_event_times[0] if len(S.next_events) else -1
         if late >= 0:
-            if late > 10e-3:
-                print(f'{late=}')
+            # if late > 10e-3:
+                # print(f'{late=}')
             # send MIDI
             event = S.next_events.pop(0)
             pitch = int(event['pitch'])

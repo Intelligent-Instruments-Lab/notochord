@@ -97,7 +97,7 @@ def main(
     suppress_midi_feedback=True,
     input_channel_map=None,
 
-    stop_on_end=True, # auto channels stop when end is sampled
+    stop_on_end=False, # auto channels stop when end is sampled
     reset_on_end=False, # reset notochord when end is sampled
     end_exponent=1, # < 1 makes end more likely, >1 less likely
 
@@ -768,6 +768,8 @@ def main(
             predict_input=predict_input, 
             predict_follow=predict_follow,
             immediate=False):
+        
+        # print(f'AUTO QUERY: {immediate=}')
 
         # check for stuck notes
         # and prioritize ending those
