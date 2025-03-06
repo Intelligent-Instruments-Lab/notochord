@@ -378,6 +378,13 @@ def main(
         initial_state = None
         config_ingest = None
     else:
+        midi_prompt = Path(midi_prompt)
+        if midi_prompt.is_dir():
+            midi_prompt = random.choice([
+                p for p in 
+                midi_prompt.glob('**/*')
+                if p.is_file()
+                ])
         initial_state, mid_channel_inst = noto.prompt(midi_prompt)
         config_ingest = {
             c+1:{'inst':i, 'mode':'auto', 'mute':False} 

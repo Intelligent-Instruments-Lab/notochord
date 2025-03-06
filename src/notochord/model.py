@@ -671,7 +671,7 @@ class Notochord(nn.Module):
     # then can put truncate_quantile in the noteon case
     def query_vipt(self,
         note_on_map=None, note_off_map=None,
-        min_time=None, max_time=None, # affecting intervent time (not durations)
+        min_time=None, max_time=None, # affecting interevent time (not durations)
         min_vel=None, max_vel=None, # affecting note on only
         min_polyphony=None, max_polyphony=None, # scalar or per instrument
         min_duration=None, max_duration=None, # scalar or per instrument
@@ -1406,7 +1406,7 @@ class Notochord(nn.Module):
             state: hidden state dict of the Notochord encoding the MIDI prompt
             channel_inst: dict mapping MIDI channel (0-index) to Notochord instrument (1-256)
         """
-        return prompt(self, midi_file, state_hash=hash_states(self.get_state()))
+        return prompt(self, Path(midi_file), state_hash=hash_states(self.get_state()))
     
 def hash_states(s):
     if isinstance(s, dict):
@@ -1420,7 +1420,7 @@ def hash_tensor(t):
 
 @mem.cache(ignore=('noto',))
 def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None): 
-    # checkpoint name used for disk cache
+    # state_hash is used for disk cache only
     """Read a MIDI file and feed events to a Notochord model.
 
     Args:
