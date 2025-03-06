@@ -707,7 +707,7 @@ def main(
                 play_event(noto_channel,tag='NOTO', memo='follow')
 
     # @lock
-    def noto_reset():
+    def noto_reset(query=True):
         """reset Notochord and end all of its held notes"""
         print('RESET')
 
@@ -715,15 +715,8 @@ def main(
         pending.clear()
         
         # end Notochord held notes
-        # for (chan,inst,pitch) in history.note_triples:
-        for note in history.notes:
-            if note.inst in mode_insts('auto'):
-                pending.set(dict(
-                    inst=note.inst, pitch=note.pitch, vel=0))
-                play_event(
-                    channel=note.chan, 
-                    feed=False, # skip feeding Notochord since we are resetting it
-                    tag='NOTO', memo='reset')
+        # skip feeding for speed, since notochord gets reset anyway
+        end_held(feed=False, memo='reset')
                 
         # reset notochord state
         noto.reset(state=initial_state)
@@ -733,7 +726,7 @@ def main(
         # TODO: feed note-ons from any held input/follower notes?
 
         # query the fresh notochord for a new prediction
-        if pending.gate:
+        if query and pending.gate:
             auto_query(immediate=True)
 
     # @lock
@@ -760,14 +753,19 @@ def main(
         if sustain:
             return
         
+        end_held(memo='mute')
+        
+    def end_held(feed=True, channel=None, memo=None):
         # end+feed all held notes
         # for (chan,inst,pitch) in history.note_triples:
+        channels = mode_chans('auto') if channel is None else [channel]
+        ended_any = False
         for note in history.notes:
-            if note.chan in mode_chans('auto'):
-                pending.set(dict(
-                    inst=note.inst, pitch=note.pitch, vel=0))
-                play_event(
-                    channel=note.chan, tag='AUTO', memo='mute')
+            if note.chan in channels:
+                pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
+                play_event(channel=note.chan, feed=feed, tag='NOTO', memo=memo)
+                ended_any = True
+        return ended_any
 
     # query Notochord for a new next event
     # @lock
@@ -1124,21 +1122,21 @@ def main(
             auto_query()
             return
                 
+        do_stop = False
         do_reset = False
         if (stop_on_end or reset_on_end) and pending.sample_end():
             print('END')
-            # pending.clear()
-            if stop_on_end:
-                pending.gate = False
-            if reset_on_end:
-                do_reset = True # needs to happen after final event plays
-                # pending.clear()
-                # noto_reset()
+            do_stop = stop_on_end
+            do_reset = reset_on_end # needs to happen after final event plays
 
         play_event(channel=chan, tag='NOTO')
 
         if do_reset:
-            noto_reset()
+            noto_reset(query=not do_stop)
+        elif do_stop:
+            end_held()
+
+        return do_stop
 
     def maybe_punch_out():
         none_held = set(mode_chans('input'))
@@ -1177,7 +1175,7 @@ def main(
             if pending.is_auto():
                 # prediction happens
                 with profile('auto_event', print=print, enable=profiler):
-                    auto_event()
+                    do_stop = auto_event()
                 immediate = True
             else:
                 immediate = False
@@ -1187,7 +1185,7 @@ def main(
 
             # query for new prediction
             # if get_dt() < noto.max_dt and not debug_query:
-            if not debug_query:
+            if not (do_stop or debug_query):
                 with profile('auto_query', print=print, enable=profiler):
                     auto_query(immediate=immediate)
 
@@ -1204,11 +1202,7 @@ def main(
     def _():
         """end any remaining notes"""
         print(f'cleanup: {history.notes=}')
-        for note in history.notes:
-            if note.inst in mode_insts(('auto', 'follow')):
-                # midi.note_off(note=note.pitch, velocity=0, channel=note.chan-1)
-                send_midi(note=note.pitch, velocity=0, channel=note.chan)
-                # midi.note_on(note=note.pitch, velocity=0, channel=note.chan-1)
+        end_held(feed=False, memo='cleanup')
 
     ### update_* keeps the UI in sync with the state
 
@@ -1268,12 +1262,7 @@ def main(
 
         if prev_m=='auto':
             # release held notes
-            for note in history.notes:
-                if note.chan==c:
-                    pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
-                    play_event(
-                        channel=note.chan, 
-                        tag='NOTO', memo='mode change')
+            end_held(channel=c, memo='mode change')
 
         if update:
             update_config()
@@ -1289,13 +1278,10 @@ def main(
             # print('SAME INSTRUMENT')
             return
 
-        # for (chan,inst,pitch) in history.note_triples:
-        for note in history.notes:
-            if note.chan==c and config[note.chan]['mode']!='input':
-                pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
-                play_event(
-                    channel=note.chan, 
-                    tag='NOTO', memo='change instrument')
+        # end held notes on old instrument
+        if config[c]['mode']!='input':
+            end_held(channel=c, memo='instrument change')
+
         # send pc if appropriate
         if send_pc:
             do_send_pc(c, i)
@@ -1308,22 +1294,19 @@ def main(
         if update:
             update_config()
 
+        if pending.gate:
+            auto_query()
+
     @lock
     def set_mute(c, b, update=True):
         config[c]['mute'] = b
         if b:
             print(f'mute channel {c}')
             # release held notes
-            # for (chan,inst,pitch) in history.note_triples:
             ended_any = False
-            for note in history.notes:
-                print(f'held {note=}')
-                if note.chan==c and config[c]['mode']!='input':
-                    pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
-                    play_event(
-                        channel=note.chan, 
-                        tag='NOTO', memo='mute channel')
-                    ended_any = True
+            if config[c]['mode']!='input':
+                ended_any = end_held(channel=c, memo='mute channel')
+
             if pending.gate:
                 auto_query(immediate=ended_any)
         else:
