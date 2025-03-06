@@ -406,7 +406,7 @@ def main(
                 if config is not None:
                     print('WARNING: `--config` overrides `--preset`')
                 break
-    elif len(presets):
+    elif (midi_prompt is None or not prompt_instruments) and len(presets):
         config_file = {**presets[0]['channel']}
         # preset = list(presets)[0]
 

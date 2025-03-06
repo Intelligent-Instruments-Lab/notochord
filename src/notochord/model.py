@@ -1480,6 +1480,12 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
         else: continue
 
     print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
+
+    # don't report channels without note events
+    mid_channel_inst = {
+        c:i for c,i in mid_channel_inst.items() 
+        if event_count[c]}
+    
     # print(event_count)
     # print(mid_channel_inst)  
     return noto.get_state(), dict(mid_channel_inst)
