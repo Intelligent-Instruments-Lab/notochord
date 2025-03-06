@@ -1486,9 +1486,13 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
 
     # for each channel, report instrument with most note events,
     # ignoring any with zero events
-    mid_channel_inst = {
-        c:max((n,i) for (c_,i),n in event_count.items() if c_==c)[1]
+    print(f'{mid_channel_inst=}')
+    mid_channel_insts = {
+        c:[(n,i) for (c_,i),n in event_count.items() if c_==c and n>0]
         for c in mid_channel_inst
+    }
+    mid_channel_inst = {
+        c:max(l)[1] for c,l in mid_channel_insts.items() if len(l)
     }
     
     # print(event_count)
