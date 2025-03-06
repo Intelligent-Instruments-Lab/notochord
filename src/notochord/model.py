@@ -1450,15 +1450,16 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
     print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
 
     for msg in tqdm(mid, desc='ingesting MIDI prompt'):
+        chan = msg.channel if hasattr(msg, 'channel') else None
         # when iterating over a track this is ticks,
         # when iterating the whole file it's seconds
         time_seconds += msg.time
 
         if msg.type=='program_change':
             inst = msg.program + 1 + 128*int(msg.channel==9)
-            mid_channel_inst[msg.channel] = inst
+            mid_channel_inst[chan] = inst
             # tqdm.write(str(msg))
-            tqdm.write(f'MIDI file: set program {msg.program} (channel {msg.channel}) at {time_seconds} seconds')
+            tqdm.write(f'MIDI file: set program {msg.program} (channel {chan}) at {time_seconds} seconds')
             
         elif msg.type=='set_tempo':
             us_per_beat = msg.tempo
@@ -1466,12 +1467,13 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
             
         elif msg.type in ('note_on', 'note_off'):
             # make channel 10 with no PC standard drumkit
-            if msg.channel not in mid_channel_inst and msg.channel==9:
-                mid_channel_inst[msg.channel] = 129
+            if chan not in mid_channel_inst and chan==9:
+                mid_channel_inst[chan] = 129
 
-            event_count[mid_channel_inst[msg.channel]] += 1
+            event_count[(chan, mid_channel_inst[chan])] += 1
+            # event_count[mid_channel_inst[msg.channel]] += 1
             noto.feed(
-                mid_channel_inst[msg.channel],
+                mid_channel_inst[chan],
                 msg.note,
                 time_seconds - prev_time_seconds,
                 msg.velocity if msg.type=='note_on' else 0)
@@ -1479,13 +1481,16 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
 
         else: continue
 
+    print(f'MIDI file: {event_count=}')
     print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
 
-    # don't report channels without note events
+    # for each channel, report instrument with most note events,
+    # ignoring any with zero events
     mid_channel_inst = {
-        c:i for c,i in mid_channel_inst.items() 
-        if event_count[c]}
+        c:max((n,i) for (c_,i),n in event_count.items() if c_==c)[1]
+        for c in mid_channel_inst
+    }
     
     # print(event_count)
     # print(mid_channel_inst)  
-    return noto.get_state(), dict(mid_channel_inst)
+    return noto.get_state(), mid_channel_inst

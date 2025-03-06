@@ -100,6 +100,7 @@ def main(
     stop_on_end=False, # auto channels stop when end is sampled
     reset_on_end=False, # reset notochord when end is sampled
     end_exponent=1, # < 1 makes end more likely, >1 less likely
+    min_end_time=8, # prevent sampling end before this much elapsed time
 
     balance_sample=False, # choose instruments which have played less recently
     n_recent=32, # number of recent note-on events to consider for above
@@ -560,7 +561,7 @@ def main(
     # tracks held notes, recently played instruments, etc
     history = NotoPerformance()
 
-    follow_status = {'depth':0}
+    status = {'follow_depth':0, 'reset_time':now()}
 
     def display_event(tag, memo, inst, pitch, vel, channel, **kw):
         """print an event to the terminal"""
@@ -636,12 +637,10 @@ def main(
             with profile('\tnoto.feed', print=print, enable=profiler>1):
                 noto.feed(**event)
 
-        follow_status['depth'] += 1
-        with profile('\t'*follow_status['depth']+'follow.event', print=print, enable=profiler>1):
-            # print(f'{follow_status=}')
+        status['follow_depth'] += 1
+        with profile('\t'*status['follow_depth']+'follow.event', print=print, enable=profiler>1):
             follow_event(event, channel)
-            follow_status['depth'] -= 1
-            # print(f'{follow_status=}')
+            status['follow_depth'] -= 1
 
     def follow_event(source_event, source_channel):
         source_vel = source_event['vel']
@@ -710,6 +709,8 @@ def main(
     def noto_reset(query=True):
         """reset Notochord and end all of its held notes"""
         print('RESET')
+
+        status['reset_time'] = now()
 
         # cancel pending predictions
         pending.clear()
@@ -1124,7 +1125,11 @@ def main(
                 
         do_stop = False
         do_reset = False
-        if (stop_on_end or reset_on_end) and pending.sample_end():
+        if (
+            (stop_on_end or reset_on_end) 
+            and (now()-status['reset_time'] > min_end_time) 
+            and pending.sample_end()
+            ):
             print('END')
             do_stop = stop_on_end
             do_reset = reset_on_end # needs to happen after final event plays
@@ -1134,7 +1139,8 @@ def main(
         if do_reset:
             noto_reset(query=not do_stop)
         elif do_stop:
-            end_held()
+            end_held(memo='stop on end')
+            pending.clear()
 
         return do_stop
 
@@ -1158,13 +1164,8 @@ def main(
         """Loop, checking if predicted next event happens"""
         # check if current prediction has passed
         time_until = pending.time_until()
-        # print(f'''
-        #     {follow_status["depth"]=},
-        #     {not testing=},
-        #     {pending.gate=},
-        #     {time_until=}''')
         if (
-            follow_status['depth']==0 and
+            status['follow_depth']==0 and
             not testing and
             pending.gate and
             pending.event and
