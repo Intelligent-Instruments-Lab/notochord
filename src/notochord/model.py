@@ -1455,8 +1455,10 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
         time_seconds += msg.time
 
         if msg.type=='program_change':
-            mid_channel_inst[msg.channel] = msg.program + 1 + 128*int(msg.channel==9)
-            tqdm.write(str(msg))
+            inst = msg.program + 1 + 128*int(msg.channel==9)
+            mid_channel_inst[msg.channel] = inst
+            # tqdm.write(str(msg))
+            tqdm.write(f'MIDI file: set program {msg.program} (channel {msg.channel}) at {time_seconds} seconds')
             
         elif msg.type=='set_tempo':
             us_per_beat = msg.tempo

@@ -1371,7 +1371,7 @@ def main(
         setattr(tui, f'action_inst_{i}', ft.partial(action_inst, i))
         setattr(tui, f'action_mute_{i}', ft.partial(action_mute, i))
 
-    for i in range(10):
+    for i in range(NotoPresets.n_presets):
         setattr(tui, f'action_preset_{i}', ft.partial(action_preset, i))
 
     ### additional key/button actions
@@ -1565,8 +1565,11 @@ class NotoTUI(TUI):
         # print(self.screen)
 
     def set_preset(self, idx, name):
-        node = self.query_one('#'+preset_id(idx))
-        node.label = str(idx) if name is None else name
+        if idx < NotoPresets.n_presets:
+            node = self.query_one('#'+preset_id(idx))
+            node.label = str(idx) if name is None else name
+        else:
+            self.write(f'warning: more than {NotoPresets.n_presets} presets\n')
         # node.label = name
 
     def set_channel(self, chan, cfg):
