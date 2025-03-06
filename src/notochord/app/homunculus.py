@@ -838,12 +838,14 @@ def main(
         steer_time = 1-controls.get('steer_rate', 0.5)
         steer_pitch = controls.get('steer_pitch', 0.5)
         steer_density = controls.get('steer_density', 0.5)
+        steer_velocity = controls.get('steer_velocity', 0.5)
 
         rhythm_temp = controls.get('rhythm_temp', 1)
         timing_temp = controls.get('timing_temp', 1)
         
         tqt = (max(0,steer_time-0.5), min(1, steer_time+0.5))
         tqp = (max(0,steer_pitch-0.5), min(1, steer_pitch+0.5))
+        tqv = (max(0,steer_velocity-0.5), min(1, steer_velocity+0.5))
 
         # idea: maintain an 'instrument presence' quantity
         # incorporating time since / number of notes playing
@@ -929,6 +931,7 @@ def main(
                     min_vel=min_vel, max_vel=max_vel,
                     truncate_quantile_time=tqt,
                     truncate_quantile_pitch=tqp,
+                    truncate_quantile_vel=tqv,
                     rhythm_temp=rhythm_temp,
                     timing_temp=timing_temp,
                     steer_density=steer_density,

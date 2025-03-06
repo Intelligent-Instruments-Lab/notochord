@@ -36,19 +36,25 @@ class Query:
 # TODO: refactor use of Range into a 'cases' keyword, rather than a 'then' case
 # add case index to the event
 class Range:
-    def __init__(self, lo=-torch.inf, hi=torch.inf, weight=1, sample_lo=None, sample_hi=None):
-        """use lo, hi when computing weights of each branch; but actually sample between sample_lo and sample_hi. for example, you could let lo,hi cover the full range to compute the true model on/off ratio, but sample from a narrow range of allowed velocities in the noteOn case"""
+    def __init__(self, lo=-torch.inf, hi=torch.inf, weight=1, sample_lo=None, sample_hi=None, **kw):
+        """use lo, hi when computing weights of each branch; but actually sample between sample_lo and sample_hi. for example, you could let lo,hi cover the full range to compute the true model on/off ratio, but sample from a narrow range of allowed velocities in the noteOn case.
+
+        **kw gets passed to sample once the case is selected
+        """
         self.lo = lo
         self.hi = hi
         self.weight = weight
         self.sample_lo = lo if sample_lo is None else sample_lo
         self.sample_hi = hi if sample_hi is None else sample_hi
+        self.kw = kw
 
 class Subset:
-    def __init__(self, values=None, weight=1, sample_values=None):
+    def __init__(self, values=None, weight=1, sample_values=None, **kw):
+        """**kw gets passed to sample once the case is selected"""
         self.values = values
         self.weight = weight
         self.sample_values = values if sample_values is None else sample_values
+        self.kw = kw
 
 def get_from_scalar_or_dict(x, default=None):
     if isinstance(x, dict):
@@ -503,8 +509,9 @@ class Notochord(nn.Module):
                     idx = 0
                 # sample from subset
                 # TODO: handle case where user supplies cases and whitelist
+                s = query.cases[idx]
                 result = sample(
-                    params, whitelist=query.cases[idx].sample_values, **query.kw)
+                    params, whitelist=s.sample_values, **query.kw, **s.kw)
             else:
                 # weiighted ranges case
                 assert all(isinstance(r, Range) for r in query.cases), query.cases
@@ -521,7 +528,7 @@ class Notochord(nn.Module):
                 # sample from range
                 # TODO: handle case where user supplies cases and truncate
                 result = sample(
-                    params, truncate=(r.sample_lo, r.sample_hi), **query.kw)
+                    params, truncate=(r.sample_lo, r.sample_hi), **query.kw, **r.kw)
 
 
         if not result.isfinite().all():
@@ -678,6 +685,7 @@ class Notochord(nn.Module):
         rhythm_temp=None, timing_temp=None,
         truncate_quantile_time=None,
         truncate_quantile_pitch=None,
+        truncate_quantile_vel=None,
         steer_density=None,
         inst_weights=None,
         no_steer=None,
@@ -806,7 +814,7 @@ class Notochord(nn.Module):
             'vel', 
             cases=(
                 Range(-torch.inf,0.5,w_off), 
-                Range(0.5,torch.inf,w_on,min_vel,max_vel)),
+                Range(0.5,torch.inf,w_on,min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
             then=lambda e: Query(
                 'inst', 
                 whitelist={
@@ -816,7 +824,7 @@ class Notochord(nn.Module):
                     'pitch', 
                     whitelist=note_map(e),
                     truncate_quantile=(
-                        None if self.is_drum(e['inst']) 
+                        None if e['vel']==0 or self.is_drum(e['inst']) 
                         else truncate_quantile_pitch),
                     then=lambda e: Query(
                         'time', #'note on' if e['vel']>0 else 'note off',         

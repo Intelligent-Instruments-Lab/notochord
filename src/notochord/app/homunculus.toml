@@ -17,20 +17,26 @@ value = 0.5
 range = [0, 1]
 
 [[control]]
+name = 'steer_velocity'
+control_change = [4, 77]
+value = 0
+range = [0, 1]
+
+[[control]]
 name = 'timing_temp'
-control_change = [78]
+control_change = [5, 78]
 value = 0.2
 range = [0, 1]
 
 [[control]]
 name = 'rhythm_temp'
-control_change = [79]
+control_change = [6, 79]
 value = 0.9
 range = [0, 1]
 
 [[action]]
 name = 'reset'
-control_change = [4, 77]
+control_change = [8, 81]
 
 [[action]]
 name = 'query'
