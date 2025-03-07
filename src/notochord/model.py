@@ -760,6 +760,7 @@ class Notochord(nn.Module):
             for i,ps in note_off_map.items()
             for p in ps}
         
+        
         # latest possible event is minimum max remaining duration over all held notes  
         latest_event = max_time
         for (i,p),t in self.held_notes.items():
@@ -767,6 +768,9 @@ class Notochord(nn.Module):
         # slip to accomodate global constraint
         latest_event = max(min_time, latest_event)
 
+        ### DEBUG
+        # print(f'{soonest_off=}')
+        # print(f'{max_time=} {min_time=} {[(i,max_dur(i),t) for (i,p),t in self.held_notes.items()]=} {latest_event=}')
         # illegal note offs:
         #   the soonest possible note-off is later than the latest possible event
         new_note_off_map = {}

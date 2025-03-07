@@ -466,7 +466,7 @@ def main(
         return r
     def auto_inst_channel(i):
         for k,v in config.items():
-            if v['inst']==i:
+            if v['mode']=='auto' and v['inst']==i:
                 return k
         return None
     def channel_followers(chan):
@@ -526,13 +526,15 @@ def main(
         def occurred(self):
             self.event = None
             self.last_event_time = self.next_event_time
-        def set(self, event):
+        def set(self, event, display=True):
             if event.get('time') is None:
                 event['time'] = self.time_since()
             self.event = event
             self.next_event_time = event['time'] + (
                 self.last_event_time or now())
-            tui.defer(prediction=pending.event)
+            if display:
+                tui.defer(prediction=pending.event)
+            # print(pending.event)
             # print(f'{now()=} {self.next_event_time=}')
         def time_since(self):
             if self.last_event_time is None:
@@ -778,8 +780,6 @@ def main(
             predict_follow=predict_follow,
             immediate=False):
         
-        # print(f'AUTO QUERY: {immediate=}')
-
         # check for stuck notes
         # and prioritize ending those
         for (_, inst, pitch), note_data in history.note_data.items():
@@ -830,7 +830,7 @@ def main(
             inst_modes.append('input')
         allowed_insts = mode_insts(inst_modes, allow_muted=False)
 
-        held_notes = history.held_inst_pitch_map()
+        # held_notes = history.held_inst_pitch_map()
         # print(f'{held_notes=}')
 
         steer_time = 1-controls.get('steer_rate', 0.5)
@@ -894,6 +894,7 @@ def main(
                 min_polyphony[i], max_polyphony[i] = cfg['poly']
             if cfg is not None and 'duration' in cfg:
                 min_duration[i], max_duration[i] = cfg['duration']
+        print(min_duration,max_duration)
 
         # print(note_on_map, note_off_map)
 
@@ -969,11 +970,14 @@ def main(
 
     def dispatch_action(k):   
         if k=='reset':
-            noto_reset()
+            # noto_reset()
+            action_queue.append(ft.partial(noto_reset))
         elif k=='query':
-            auto_query()
+            # auto_query()
+            action_queue.append(ft.partial(auto_query))
         elif k=='mute':
-            noto_mute()
+            # noto_mute()
+            action_queue.append(ft.partial(noto_mute))
         else:
             print(f'WARNING: action "{k}" not recognized')
 
@@ -1030,7 +1034,8 @@ def main(
         channel = input_channel_map.get(channel, channel)
 
         if punch_in:
-            set_mode(channel, 'input')
+            # set_mode(channel, 'input')
+            action_queue.append(ft.partial(set_mode, channel, 'input'))
 
         cfg = config[channel]
 
@@ -1064,17 +1069,18 @@ def main(
             print(f'WARNING: ignoring rate-limited input {input_dens=}')
             dropped.add(k)
             return 
+        
+        action_queue.append(ft.partial(
+            do_note_input, channel, inst, pitch, vel))
 
+    def do_note_input(channel, inst, pitch, vel):
         # feed event to Notochord
         # with profile('feed', print=print, enable=profiler):
         # with lock:
-        pending.set({'inst':inst, 'pitch':pitch, 'vel':vel})
+        pending.set({'inst':inst, 'pitch':pitch, 'vel':vel}, display=False)
         play_event(channel=channel, send=thru, tag='PLAYER')
         # query for new prediction
-        auto_query(immediate=True)
-
-        # send a MIDI reply for latency testing purposes:
-        # if testing: midi.cc(control=3, value=msg.note, channel=15)
+        auto_query(immediate=True)  
 
     def auto_event():
         # print('auto_event')
@@ -1127,20 +1133,24 @@ def main(
             if c not in recent_events.channel.values:
                 set_mode(c, 'auto')
 
-    @repeat(lock=True)
+    @repeat(lock=True, err_file=tui)
     def _():
         """Loop, checking if predicted next event happens"""
         # check if current prediction has passed
-        time_until = pending.time_until()
-        if len(action_queue):
-            action_queue.pop(0)()
-        elif (
+        # time_until = pending.time_until()
+        # print(f'repeat {time.time()}')
+        for _ in range(8): # process multiple actions per tick
+            if len(action_queue):
+                # print(action_queue)
+                action_queue.pop(0)()
+        if (
             status['follow_depth']==0 and
             not testing and
             pending.gate and
             pending.event and
             # stopwatch.read() > get_dt()
-            time_until <= 0
+            # time_until <= 0
+            pending.time_until() <= 0
             ):
             # if so, check if it is a notochord-controlled instrument
             if pending.is_auto():
@@ -1149,22 +1159,22 @@ def main(
                     do_stop = auto_event()
                 immediate = True
             else:
+                do_stop = False
                 immediate = False
 
             if punch_in:
                 maybe_punch_out()
 
             # query for new prediction
-            # if get_dt() < noto.max_dt and not debug_query:
             if not (do_stop or debug_query):
                 with profile('auto_query', print=print, enable=profiler):
                     auto_query(immediate=immediate)
-
 
         # adaptive time resolution here -- yield to other threads when 
         # next event is not expected, but time precisely when next event
         # is imminent
         wait = pending.time_until() if pending.is_auto() else 10e-3
+        # print(f'{wait=}')
         r = max(0, min(10e-3, wait))
         # print('wait', r)
         return r
@@ -1178,13 +1188,16 @@ def main(
     ### update_* keeps the UI in sync with the state
 
     def update_config():
+        # pass
         # print(config)
         for c,v in config.items():
-            tui.set_channel(c, v)
+            # tui.set_channel(c, v)
+            tui.call_from_anywhere(tui.set_channel, c, v)
 
     def update_presets():
         for k,p in enumerate(presets):
-            tui.set_preset(k, p.get('name'))
+            # tui.set_preset(k, p.get('name'))
+            tui.call_from_anywhere(tui.set_preset, k, p.get('name'))
 
     @tui.on
     def mount():
@@ -1278,7 +1291,7 @@ def main(
             if config[c]['mode']!='input':
                 ended_any = end_held(channel=c, memo='mute channel')
 
-            if pending.gate:
+            if query and pending.gate:
                 auto_query(immediate=ended_any)
         else:
             print(f'unmute channel {c}')
@@ -1296,7 +1309,7 @@ def main(
             if c not in config:
                 config[c] = default_config_channel(c)
             if c not in preset:
-                set_mute(c, True, update=False)
+                set_mute(c, True, update=False, query=False)
             else:
                 # NOTE: config should *not* be updated before calling set_* 
                 v = {**preset[c]}
@@ -1309,7 +1322,7 @@ def main(
             auto_query()
 
     ### action_* runs on key/button press;
-    ### invokes cycler / picker logic and calls set_*
+    ### invokes cycler / picker logic and schedules set_*
 
     # this is pretty awful
     # need a better way to reconcile iipyper and textual here
@@ -1317,12 +1330,13 @@ def main(
         if c not in config: return
         # TODO: mode picker
         if config[c]['mode'] == 'auto':
-            set_mode(c, 'input')
+            mode = 'input'
         elif config[c]['mode'] == 'input' and config[c]['source']!=c:
             # TODO: source picker for follow
-            set_mode(c, 'follow')
+            mode = 'follow'
         else:
-            set_mode(c, 'auto')
+            mode = 'auto'
+        action_queue.append(ft.partial(set_mode, c, mode))
 
     def action_inst(c):
         print(f'inst channel {c}')
@@ -1444,7 +1458,7 @@ class NotoPrediction(Static):
         if evt is None:
             s = ''
         else:
-            s = f"\tinstrument: {evt['inst']:3d}    pitch: {evt['pitch']:3d}    time: {int(evt['time']*1000):4d} ms    velocity:{int(evt['vel']):3d}     end: {evt['end']:.5f}"
+            s = f"\tinstrument: {evt['inst']:3d}    pitch: {evt['pitch']:3d}    time: {int(evt['time']*1000):4d} ms    velocity:{int(evt['vel']):3d}     end: {evt.get('end', 0):.5f}"
         self.update(Panel(s, title='prediction'))
 
 class Mixer(Static):
