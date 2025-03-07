@@ -563,6 +563,8 @@ def main(
 
     status = {'follow_depth':0, 'reset_time':now()}
 
+    action_queue = []
+
     def display_event(tag, memo, inst, pitch, vel, channel, **kw):
         """print an event to the terminal"""
         if tag is None:
@@ -674,7 +676,7 @@ def main(
                 if len(pitches)==0:
                     # edge case: no possible pitch
                     print(f'skipping {noto_channel=}, no pitches available')
-                    print(f'{pitch_range} minus {{source_pitch}} minus {already_playing}')
+                    print(f'{pitch_range} minus {source_pitch} minus {already_playing}')
                     continue
                 elif len(pitches)==1:
                     # edge case: there is exactly one possible pitch
@@ -705,7 +707,7 @@ def main(
                     inst=noto_inst, pitch=noto_pitch, time=dt, vel=0))
                 play_event(noto_channel,tag='NOTO', memo='follow')
 
-    # @lock
+    @lock
     def noto_reset(query=True):
         """reset Notochord and end all of its held notes"""
         print('RESET')
@@ -730,7 +732,7 @@ def main(
         if query and pending.gate:
             auto_query(immediate=True)
 
-    # @lock
+    @lock
     def noto_mute(sustain=False):
         tui.query_one('#mute').label = 'UNMUTE' if pending.gate else 'MUTE'
         # if sustain:
@@ -764,7 +766,8 @@ def main(
         for note in history.notes:
             if note.chan in channels:
                 pending.set(dict(inst=note.inst, pitch=note.pitch, vel=0))
-                play_event(channel=note.chan, feed=feed, tag='NOTO', memo=memo)
+                play_event(
+                    channel=note.chan, feed=feed, tag='NOTO', memo=memo)
                 ended_any = True
         return ended_any
 
@@ -795,8 +798,6 @@ def main(
                 print(f'END STUCK NOTE {inst=},{pitch=}')
                 return
 
-        # all_insts = mode_insts(('auto', 'input', 'follow'), allow_muted=True)
-        # counts = history.inst_counts(n=n_recent, insts=all_insts)
         counts = defaultdict(int)
         for i,c in history.inst_counts(n=n_recent).items():
             counts[i] = c
@@ -829,9 +830,6 @@ def main(
             inst_modes.append('input')
         allowed_insts = mode_insts(inst_modes, allow_muted=False)
 
-        # assert len(allowed_insts - all_insts)==0, (allowed_insts, all_insts)
-
-        # held_notes = history.held_inst_pitch_map(all_insts)
         held_notes = history.held_inst_pitch_map()
         # print(f'{held_notes=}')
 
@@ -883,38 +881,19 @@ def main(
             for i in allowed_insts#allowed_insts
             if i in inst_pitch_map
         }
-        # # use any instruments which are currently holding notes
-        # note_off_map = {
-        #     i: set(held_notes[i]) # only held notes
-        #     for i in allowed_insts
-        #     if i in held_notes
-        # }
-
-        # polyphony constraints
-        # prevent note on if polyphony exceeded
-        # for i in list(note_on_map):
-        #     c = auto_inst_channel(i)
-        #     if c is None: continue
-        #     cfg = config[c]
-        #     if len(held_notes[i]) >= cfg.get('poly', [0, np.inf])[1]:
-        #         note_on_map.pop(i)
-        # # prevent note off if below minimum polyphony
-        # for i in list(note_off_map):
-        #     c = auto_inst_channel(i)
-        #     if c is None: continue
-        #     cfg = config[c]
-        #     if cfg is None: continue
-        #     if len(held_notes[i]) <= cfg.get('poly', [0, np.inf])[0]:
-        #         note_off_map.pop(i)
 
         min_polyphony = {}
         max_polyphony = {}
+        min_duration = {}
+        max_duration = {}
         for i in note_on_map:
             c = auto_inst_channel(i)
             if c is None: continue
             cfg = config[c]
             if cfg is not None and 'poly' in cfg:
                 min_polyphony[i], max_polyphony[i] = cfg['poly']
+            if cfg is not None and 'duration' in cfg:
+                min_duration[i], max_duration[i] = cfg['duration']
 
         # print(note_on_map, note_off_map)
 
@@ -924,9 +903,8 @@ def main(
             with profile('\tquery_method', print=print, enable=profiler>1):
                 pending.set(query_method(
                     note_on_map, #note_off_map,
-                    # min_duration=0.1, max_duration=0.11,###DEBUG
-                    # min_duration=1, max_duration=1.01,###DEBUG
                     min_polyphony=min_polyphony, max_polyphony=max_polyphony,
+                    min_duration=min_duration, max_duration=max_duration,
                     min_time=min_time, max_time=max_t,
                     min_vel=min_vel, max_vel=max_vel,
                     truncate_quantile_time=tqt,
@@ -939,12 +917,8 @@ def main(
                     no_steer=mode_insts(('input','follow'), allow_muted=False),
                 ))
         except Exception as e:
-            # print(f'WARNING: query failed. {allowed_insts=} {note_on_map=} {note_off_map=}')
             print(f'WARNING: query failed. {allowed_insts=} {note_on_map=}')
             print(f'{noto.held_notes=}')
-            # print(e.args)
-            # print(repr(e.__traceback__))
-            # traceback.print_tb(e.__traceback__, file=tui)
             traceback.print_exc(file=tui)
             pending.clear()
 
@@ -1067,14 +1041,6 @@ def main(
         if cfg['mute']:
             print(f'WARNING: ignoring MIDI {msg} on muted channel')
             return
-        
-        # port = cfg.get('port', None)
-        # if thru:
-        #     if msg.velocity>0 and msg.type=='note_on' and thru_vel_offset is not None:
-        #         vel = max(1, int(msg.velocity*thru_vel_offset))
-        #         midi.send(msg.type, note=msg.note, channel=channel+1, velocity=vel, port=port)
-        #     else:
-        #         midi.send(msg, port=port, channel=channel+1)
 
         inst = channel_inst(channel)
         pitch = msg.note + cfg.get('note_shift', 0)
@@ -1161,13 +1127,14 @@ def main(
             if c not in recent_events.channel.values:
                 set_mode(c, 'auto')
 
-
     @repeat(lock=True)
     def _():
         """Loop, checking if predicted next event happens"""
         # check if current prediction has passed
         time_until = pending.time_until()
-        if (
+        if len(action_queue):
+            action_queue.pop(0)()
+        elif (
             status['follow_depth']==0 and
             not testing and
             pending.gate and
@@ -1272,7 +1239,7 @@ def main(
             update_config()
 
 
-    def set_inst(c, i, update=True):
+    def set_inst(c, i, update=True, query=True):
         print(f'SET INSTRUMENT {i}')
         if c in config:
             prev_i = config[c]['inst']
@@ -1298,11 +1265,11 @@ def main(
         if update:
             update_config()
 
-        if pending.gate:
+        if query and pending.gate:
             auto_query()
 
-    @lock
-    def set_mute(c, b, update=True):
+    # @lock
+    def set_mute(c, b, update=True, query=True):
         config[c]['mute'] = b
         if b:
             print(f'mute channel {c}')
@@ -1315,12 +1282,31 @@ def main(
                 auto_query(immediate=ended_any)
         else:
             print(f'unmute channel {c}')
-            if pending.gate:
+            if query and pending.gate:
                 auto_query()
 
         if update:
             update_config()
 
+    # @lock
+    def set_preset(p):
+        print(f'load preset: {p}')
+        preset = presets[p]['channel']
+        for c in range(1,17):    
+            if c not in config:
+                config[c] = default_config_channel(c)
+            if c not in preset:
+                set_mute(c, True, update=False)
+            else:
+                # NOTE: config should *not* be updated before calling set_* 
+                v = {**preset[c]}
+                set_mode(c, v.pop('mode'), update=False)
+                set_inst(c, v.pop('inst'), update=False, query=False)
+                set_mute(c, v.pop('mute'), update=False, query=False)
+                config[c].update(v)
+        update_config()
+        if pending.gate:
+            auto_query()
 
     ### action_* runs on key/button press;
     ### invokes cycler / picker logic and calls set_*
@@ -1344,28 +1330,14 @@ def main(
 
     def action_mute(c):
         if i not in config: return
-        set_mute(c, not config[c].get('mute', False))
+        # set_mute(c, not config[c].get('mute', False))
+        action_queue.append(ft.partial(
+            set_mute, c, not config[c].get('mute', False)))
 
     def action_preset(p):
         if p >= len(presets): 
             return
-        preset = presets[p]['channel']
-        print(f'load preset: {p}')
-        for c in range(1,17):    
-            if c not in config:
-                config[c] = default_config_channel(c)
-            if c not in preset:
-                set_mute(c, True, update=False)
-            else:
-                # note config should *not* be updated before calling set_* 
-                v = {**preset[c]}
-                # v = {**config[c]}
-                # v.update(preset[c])
-                set_mode(c, v.pop('mode'), update=False)
-                set_inst(c, v.pop('inst'), update=False)
-                set_mute(c, v.pop('mute'), update=False)
-                config[c].update(v)
-        update_config()
+        action_queue.append(ft.partial(set_preset, p))
 
     ### set actions which have an index argument
     ### TODO move this logic into @tui.set_action
@@ -1382,19 +1354,23 @@ def main(
 
     @tui.set_action
     def mute():
-        noto_mute()
+        # noto_mute()
+        action_queue.append(ft.partial(noto_mute))
 
     @tui.set_action
     def sustain():
-        noto_mute(sustain=True)
+        # noto_mute(sustain=True)
+        action_queue.append(ft.partial(noto_mute, sustain=True))
     
     @tui.set_action
     def reset():
-        noto_reset()
+        # noto_reset()
+        action_queue.append(ft.partial(noto_reset))
     
     @tui.set_action
     def query():
-        auto_query()
+        # auto_query()
+        action_queue.append(ft.partial(auto_query))
 
     ### TUI classes which close over variables defined in main
 
@@ -1407,7 +1383,8 @@ def main(
         def on_button_pressed(self, event: Button.Pressed):
             self.app.pop_screen()
             self.app.pop_screen()
-            set_inst(self.channel, self.inst)
+            # set_inst(self.channel, self.inst)
+            action_queue.append(ft.partial(set_inst, self.channel, self.inst))
 
     class InstrumentGroup(Button):
         """button which picks an instrument group"""

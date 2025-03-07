@@ -726,7 +726,8 @@ class Notochord(nn.Module):
             
         # exclude held notes for note on
         for i in held_map:
-            note_on_map[i] = set(note_on_map[i]) - held_map[i]
+            if i in note_on_map:
+                note_on_map[i] = set(note_on_map[i]) - held_map[i]
 
         # exclude non-held notes for note off
         note_off_map = {
