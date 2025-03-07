@@ -894,7 +894,6 @@ def main(
                 min_polyphony[i], max_polyphony[i] = cfg['poly']
             if cfg is not None and 'duration' in cfg:
                 min_duration[i], max_duration[i] = cfg['duration']
-        print(min_duration,max_duration)
 
         # print(note_on_map, note_off_map)
 
