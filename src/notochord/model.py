@@ -5,6 +5,7 @@ from collections import namedtuple, defaultdict
 from pathlib import Path
 import hashlib
 import json
+import copy
 
 import mido
 from tqdm import tqdm
@@ -246,10 +247,77 @@ class Notochord(nn.Module):
 
         # volatile hidden states for caching purposes
         self.h = None
-        self.h_query = None      
+        self.h_query = None
+
+        self._default_note_map = {
+            i:range(128) for i in range(1,self.instrument_domain+1)}      
 
     def cell_state_names(self):
         return tuple(f'cell_state_{i}' for i in range(len(self.initial_state)))
+    
+    def held_map(self):
+        """
+            currently held notes as a map from instrument to pitch set
+        """
+        held_map = {}
+        for i,p in self.held_notes:
+            if i not in held_map:
+                held_map[i] = set()
+            held_map[i].add(p)
+        return held_map
+    
+    def get_note_maps(self, 
+        note_on_map=None, note_off_map=None, 
+        min_polyphony=None, max_polyphony=None):
+        """common logic for v-first sampling"""
+        # convert {(i,p):t} to {i:[p]}
+        held_map = self.held_map()
+
+        # get default note_on_map (anything)
+        if note_on_map is None:
+            note_on_map = copy.copy(self._default_note_map)
+        else:
+            note_on_map = copy.deepcopy(note_on_map)
+
+        # note offs can be any from the note_on instruments by default
+        # but users can also supply this themselves
+        if note_off_map is None:
+            note_off_map = {
+                i: held_map[i] 
+                for i in note_on_map
+                if i in held_map}
+        else:
+            note_on_map = copy.deepcopy(note_off_map)
+            
+        # exclude held notes for note on
+        for i in held_map:
+            if i in note_on_map:
+                note_on_map[i] = set(note_on_map[i]) - held_map[i]
+
+        # exclude non-held notes for note off
+        note_off_map = {
+            i: set(note_off_map[i]) & held_map[i]
+            for i in note_off_map
+            if i in held_map
+        }
+
+        # TODO: 
+        # allow breaking each constraint when it results in no options
+
+        max_poly = get_from_scalar_or_dict(max_polyphony, torch.inf)
+        min_poly = get_from_scalar_or_dict(min_polyphony, 0)
+
+        # prevent note on if polyphony exceeded
+        for i in list(note_on_map):
+            if len(held_map.get(i, [])) >= max_poly(i):
+                note_on_map.pop(i)
+
+        # prevent note off if below minimum polyphony
+        for i in list(note_off_map):
+            if len(held_map[i]) <= min_poly(i):
+                note_off_map.pop(i)
+
+        return note_on_map, note_off_map
 
     @property
     def cell_state(self):
@@ -673,9 +741,8 @@ class Notochord(nn.Module):
             (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery(note_on_map, 'note on', inst_weights))
         ]))
     
-    # TODO: should be possible to implement velocity steering now
-    # need syntax for keywords to vary by case;
-    # then can put truncate_quantile in the noteon case
+    # TODO: should be possible to constrain duration per (i,p) pair,
+    # not just per instrument?
     def query_vipt(self,
         note_on_map=None, note_off_map=None,
         min_time=None, max_time=None, # affecting interevent time (not durations)
@@ -704,100 +771,56 @@ class Notochord(nn.Module):
 
         inst_weights = inst_weights or {}
 
-        # convert {(i,p):t} to {i:[p]}
-        held_map = {}
-        for i,p in self.held_notes:
-            if i not in held_map:
-                held_map[i] = set()
-            held_map[i].add(p)
-
-        # get default note_on_map (anything)
-        if note_on_map is None:
-            note_on_map = {
-                i:range(128) for i in range(1,self.instrument_domain+1)}
-            
-        # note offs can be any from the note_on instruments by default
-        # but users can also supply this themselves
-        if note_off_map is None:
-            note_off_map = {
-                i: held_map[i] 
-                for i in note_on_map 
-                if i in held_map}
-            
-        # exclude held notes for note on
-        for i in held_map:
-            if i in note_on_map:
-                note_on_map[i] = set(note_on_map[i]) - held_map[i]
-
-        # exclude non-held notes for note off
-        note_off_map = {
-            i: set(note_off_map[i]) & held_map[i]
-            for i in note_off_map
-            if i in held_map
-        }
-
-        # TODO: break out application of these constraints to helper functions;
-        # allow breaking each constraint when it results in no options
-
-        max_poly = get_from_scalar_or_dict(max_polyphony, torch.inf)
-        min_poly = get_from_scalar_or_dict(min_polyphony, 0)
-
-        # prevent note on if polyphony exceeded
-        for i in list(note_on_map):
-            if len(held_map.get(i, [])) >= max_poly(i):
-                note_on_map.pop(i)
-
-        # prevent note off if below minimum polyphony
-        for i in list(note_off_map):
-            if len(held_map[i]) <= min_poly(i):
-                note_off_map.pop(i)
+        note_on_map, note_off_map = self.get_note_maps(
+            note_on_map, note_off_map, min_polyphony, max_polyphony
+        )
 
         max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
         min_dur = get_from_scalar_or_dict(min_duration, 0)
 
+        # duration does not constrain the soonest noteOn;
+        # the soonest possible noteOff is the next note which would end with 
+        # minimal duration (but no sooner than the global min_time)
+        # compute that soonest noteOff time for each possible noteOff:
         soonest_off = {
             (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
             for i,ps in note_off_map.items()
             for p in ps}
+        # print(f'{soonest_off=}')
         
-        
-        # latest possible event is minimum max remaining duration over all held notes  
+        # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
         latest_event = max_time
         for (i,p),t in self.held_notes.items():
             latest_event = min(latest_event, max_dur(i) - t)
         # slip to accomodate global constraint
         latest_event = max(min_time, latest_event)
 
-        ### DEBUG
-        # print(f'{soonest_off=}')
-        # print(f'{max_time=} {min_time=} {[(i,max_dur(i),t) for (i,p),t in self.held_notes.items()]=} {latest_event=}')
-        # illegal note offs:
-        #   the soonest possible note-off is later than the latest possible event
-        new_note_off_map = {}
-        for i,ps in note_off_map.items():
-            for p in ps:
-                if soonest_off[(i,p)] <= latest_event:
-                    if i not in new_note_off_map:
-                        new_note_off_map[i] = []
-                    new_note_off_map[i].append(p)
-        old_note_off_map = note_off_map
-        note_off_map = new_note_off_map
+        # if latest_event is <= min_time, probably means some notes are already over time and should be prioritized to end
+        # we don't want noteoffs which would prevent ending a different note on time -- except in the case where the soonest noteoff is already late according to global min_time; any such noteOff is valid
+        # since both latest_event and soonest_off are clipped to min_time --
+        # we can exclude noteOffs when soonest_off > latest_event,
+        # but allow soonest_off==latest_event
+
+        # remove impossible note offs
+        # (i.e. soonest possible note-off is after the latest possible event)
+        for i,ps in list(note_off_map.items()):
+            for p in list(ps):
+                if soonest_off[(i,p)] > latest_event:
+                    ps.remove(p)
+            if not len(ps):
+                note_off_map.pop(i)
+                continue
 
         no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
-        no_off_old = all(len(ps)==0 for ps in old_note_off_map.values())
+        # print(f'{no_on=} {no_off=}')
 
         if no_on and no_off:
-            if no_off_old:
-                raise ValueError(f"""
-                    no possible notes {note_on_map=} {note_off_map=}""")
-            # let the duration constraint slip
-            note_off_map = old_note_off_map
-            no_off = no_off_old
-            for k in soonest_off:
-                soonest_off[k] = latest_event
+            raise ValueError(f"""
+                no possible notes {note_on_map=} {note_off_map=}""")
 
         def note_map(e):
+            # print(f'{e=}')
             if e['vel'] > 0:
                 m = note_on_map
             else:
@@ -805,6 +828,7 @@ class Notochord(nn.Module):
             i = e.get('inst')
             if i is not None:
                 m = m[i]
+            # print(f'{m=}')
             return m
                     
         w = 1 if steer_density is None else 2**(steer_density*2-1)

@@ -321,6 +321,8 @@ def main(
     print = notochord.print = iipyper.print = tui.print
     ###
 
+    print(f'{sf_inst_ranges=}')
+
     if not nominal_time:
         print('nominal_time is deprecated; nominal_time=False now sets lateness_margin to 0')
         lateness_margin = 0
