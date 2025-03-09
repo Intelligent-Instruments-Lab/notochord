@@ -302,7 +302,10 @@ class Notochord(nn.Module):
         }
 
         # TODO: 
-        # allow breaking each constraint when it results in no options
+        # allow breaking polyphony constraint when it results in no options?
+        # may not work to check here as more constraints applied downstream
+        # could track number/degree of constraint violations instead of simply
+        # removing pitches -- later sample from the top stratum only
 
         max_poly = get_from_scalar_or_dict(max_polyphony, torch.inf)
         min_poly = get_from_scalar_or_dict(min_polyphony, 0)
@@ -539,7 +542,6 @@ class Notochord(nn.Module):
         if hasattr(query, '__call__'):
             query = query(event)
         m = query.modality
-        sq = query.then
         try:
             idx = ('inst','pitch','time','vel').index(m)
         except ValueError:
@@ -564,6 +566,8 @@ class Notochord(nn.Module):
 
             if query.cases is None:
                 result = sample(params, **query.kw)
+                # print(f'{result=}, {query.kw=}, {event=}') ##DEBUG
+
             elif m in ('inst', 'pitch'):
                 # weighted subsets case
                 assert all(isinstance(s, Subset) for s in query.cases), query.cases
@@ -686,20 +690,24 @@ class Notochord(nn.Module):
         )
         return self.deep_query(q)
 
-
+    # TODO: should be possible to constrain duration per (i,p) pair,
+    # not just per instrument?
     def query_vtip(self,
-            note_on_map:Dict[int,List[int]], 
-            note_off_map:Dict[int,List[int]], 
-            min_time=None, max_time=None, 
-            min_vel=None, max_vel=None, 
-            rhythm_temp=None, timing_temp=None,
-            truncate_quantile_time=None,
-            truncate_quantile_pitch=None,
-            steer_density=None, # truncate_quantile_type ? 
-            inst_weights=None,
-            no_steer=None, # TODO
-            ):
-        """ Query in velocity-time-instrument-pitch order,
+        note_on_map=None, note_off_map=None,
+        min_time=None, max_time=None, # affecting interevent time (not durations)
+        min_vel=None, max_vel=None, # affecting note on only
+        min_polyphony=None, max_polyphony=None, # scalar or per instrument
+        min_duration=None, max_duration=None, # scalar or per instrument
+        rhythm_temp=None, timing_temp=None,
+        truncate_quantile_time=None,
+        truncate_quantile_pitch=None,
+        truncate_quantile_vel=None,
+        steer_density=None,
+        inst_weights=None,
+        no_steer=None, # TODO? can't steer time per-instrument (t before i)
+        ):
+        """
+        Query in velocity-time-instrument-pitch order,
             efficiently truncating the joint distribution to just allowable
             (velocity>0)/instrument/pitch triples.
 
@@ -707,27 +715,91 @@ class Notochord(nn.Module):
                 note_on_map: possible note-ons as {instrument: [pitch]} 
                 note_off_map: possible note-offs as {instrument: [pitch]} 
         """
+        min_time = min_time or 0
+        max_time = max_time or torch.inf
+
+        inst_weights = inst_weights or {}
+        no_steer = no_steer or set()
+
+        note_on_map, note_off_map = self.get_note_maps(
+            note_on_map, note_off_map, min_polyphony, max_polyphony
+        )
+
+        max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
+        min_dur = get_from_scalar_or_dict(min_duration, 0)
+
+        # need to compute time constraints from polyphony and duration,
+        # given velocity but not inst/pitch
+        # polyphony should't affect time except via note op/off maps
+        # soonest_off can just be reduced for purposes of truncating time
+        # but then need to compute the allowed instruments, and then pitches,
+        # given the sampled time, based on duration constraints
+        # only needed in the noteoff case: then check if time >= soonest_off
+        # 1. for any pitch in each instrument
+        # 2. which pitches for the sampled instrument
+
+        # duration does not constrain the soonest noteOn;
+        # the soonest possible noteOff is the next note which would end with 
+        # minimal duration (but no sooner than the global min_time)
+        # compute that soonest noteOff time for each possible noteOff:
+        soonest_off = {
+            (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
+            for i,ps in note_off_map.items()
+            for p in ps}
+        print(f'{soonest_off=}')
+
+        soonest_off_any = min(soonest_off.values(), default=0)
+        
+        # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
+        latest_event = max_time
+        for (i,p),t in self.held_notes.items():
+            latest_event = min(latest_event, max_dur(i) - t)
+        # slip to accomodate global constraint
+        latest_event = max(min_time, latest_event)
+
+        # print(f'pre {note_off_map=}') ###DEBUG
+
+        # remove impossible note offs
+        # (i.e. soonest possible note-off is after the latest possible event)
+        for i,ps in list(note_off_map.items()):
+            for p in list(ps):
+                if soonest_off[(i,p)] > latest_event:
+                    ps.remove(p)
+            if not len(ps):
+                note_off_map.pop(i)
+                continue
+
+        # print(f'post {note_off_map=}') ###DEBUG
+
         no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
+        # print(f'{no_on=} {no_off=}')
+
         if no_on and no_off:
             raise ValueError(f"""
                 no possible notes {note_on_map=} {note_off_map=}""")
-        
-        def get_subquery(ipm, path, weights=None):
-            return Query(
-                'time',
-                truncate=(min_time or -torch.inf, max_time or torch.inf),
-                truncate_quantile=truncate_quantile_time,
-                weight_top_p=rhythm_temp, component_temp=timing_temp,
-                then=Query(
-                    'inst', [(
-                        Subset([i], 1 if weights is None else weights[i]), 
-                        Query('pitch', path, 
-                            whitelist=list(ps), 
-                            truncate_quantile=None if self.is_drum(i) else truncate_quantile_pitch)
-                    ) for i,ps in ipm.items() if len(ps)]
-                ),
-            )
+
+        # NOTE: have to add epsilon when comparing sampled times,
+        # or else rounding error can cause discrepancy 
+        eps = 1e-5
+        def insts(e):
+            if e['vel'] > 0:
+                return note_on_map
+            else:
+                return {
+                    i for i,ps in note_off_map.items() if any(
+                        soonest_off[(i,p)] <= e['time']+eps for p in ps
+                    )}
+            
+        def pitches(e):
+            i = e['inst']
+            if e['vel'] > 0:
+                return note_on_map[i]
+            else:
+                return {
+                    p for p in note_off_map[i] 
+                    if soonest_off[(i,p)] <= e['time']+eps}
+                    
         w = 1 if steer_density is None else 2**(steer_density*2-1)
         
         w_on = 0 if no_on else w
@@ -736,13 +808,36 @@ class Notochord(nn.Module):
         min_vel = max(0.5, 0 if min_vel is None else min_vel)
         max_vel = torch.inf if max_vel is None else max_vel
         
-        return self.deep_query(Query('vel', [
-            (Range(-torch.inf,0.5,w_off), get_subquery(note_off_map, 'note off')),
-            (Range(0.5,torch.inf,w_on,min_vel,max_vel), get_subquery(note_on_map, 'note on', inst_weights))
-        ]))
+        return self.deep_query(Query(
+            'vel', 
+            cases=(
+                Range(-torch.inf,0.5,w_off), 
+                Range(0.5,torch.inf,w_on,min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
+            then=lambda e: Query(
+                'time',       
+                truncate=(
+                    min_time if e['vel']>0 else soonest_off_any,
+                    latest_event
+                ),
+                truncate_quantile=truncate_quantile_time,
+                weight_top_p=rhythm_temp, 
+                component_temp=timing_temp,
+                then=lambda e: Query(
+                    'inst', 
+                    whitelist={
+                        i:inst_weights.get(i,1) if e['vel'] > 0 else 1 
+                        for i in insts(e)},
+                    then=lambda e: Query(
+                        'pitch', 
+                        whitelist=pitches(e),
+                        truncate_quantile=(
+                            None if (
+                                e['vel']==0 
+                                or self.is_drum(e['inst']) 
+                                or e['inst'] in no_steer)
+                            else truncate_quantile_pitch),
+        )))))
     
-    # TODO: should be possible to constrain duration per (i,p) pair,
-    # not just per instrument?
     def query_vipt(self,
         note_on_map=None, note_off_map=None,
         min_time=None, max_time=None, # affecting interevent time (not durations)
@@ -770,6 +865,7 @@ class Notochord(nn.Module):
         max_time = max_time or torch.inf
 
         inst_weights = inst_weights or {}
+        no_steer = no_steer or set()
 
         note_on_map, note_off_map = self.get_note_maps(
             note_on_map, note_off_map, min_polyphony, max_polyphony
@@ -853,8 +949,11 @@ class Notochord(nn.Module):
                     'pitch', 
                     whitelist=note_map(e),
                     truncate_quantile=(
-                        None if e['vel']==0 or self.is_drum(e['inst']) 
-                        else truncate_quantile_pitch),
+                            None if (
+                                e['vel']==0 
+                                or self.is_drum(e['inst']) 
+                                or e['inst'] in no_steer)
+                            else truncate_quantile_pitch),
                     then=lambda e: Query(
                         'time', #'note on' if e['vel']>0 else 'note off',         
                         truncate=(
@@ -862,9 +961,9 @@ class Notochord(nn.Module):
                             else soonest_off[(e['inst'],e['pitch'])],
                             latest_event
                         ),
-                        truncate_quantile=None if (
-                            no_steer is not None and e['inst'] in no_steer
-                            ) else truncate_quantile_time,
+                        truncate_quantile=(
+                            None if e['inst'] in no_steer
+                            else truncate_quantile_time),
                         weight_top_p=rhythm_temp, 
                         component_temp=timing_temp
         )))))

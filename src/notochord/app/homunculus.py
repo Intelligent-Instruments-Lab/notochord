@@ -867,13 +867,14 @@ def main(
 
         # VTIP is better for time interventions,
         # VIPT is better for instrument interventions
-        # if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
-        #     # print('VTIP')
-        #     query_method = noto.query_vtip
-        # else:
-        #     # print('VIPT')
-        #     query_method = noto.query_vipt
-        query_method = noto.query_vipt ### DEBUG
+        if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
+            query_method = noto.query_vtip
+            # print('VTIP')
+        else:
+            query_method = noto.query_vipt
+            # print('VIPT')
+        # query_method = noto.query_vipt ### DEBUG
+        # query_method = noto.query_vtip ### DEBUG
 
         # print(f'considering {insts} for note_on')
         # use only currently selected instruments
@@ -918,7 +919,7 @@ def main(
                     inst_weights=inst_weights,
                     no_steer=mode_insts(('input','follow'), allow_muted=False),
                 ))
-        except Exception as e:
+        except Exception:
             print(f'WARNING: query failed. {allowed_insts=} {note_on_map=}')
             print(f'{noto.held_notes=}')
             traceback.print_exc(file=tui)
@@ -1248,6 +1249,8 @@ def main(
         if prev_m=='auto':
             # release held notes
             end_held(channel=c, memo='mode change')
+            if pending.gate:
+                auto_query()
 
         if update:
             update_config()
