@@ -100,13 +100,13 @@ def main(
     stop_on_end=False, # auto channels stop when end is sampled
     reset_on_end=False, # reset notochord when end is sampled
     end_exponent=1, # < 1 makes end more likely, >1 less likely
-    min_end_time=8, # prevent sampling end before this much elapsed time
+    min_end_time=8, # prevent sampling end before this many seconds since reset
 
     balance_sample=False, # choose instruments which have played less recently
     n_recent=32, # number of recent note-on events to consider for above
     n_margin=8, # amount of 'slack' in the balance_sample calculation
     
-    max_note_len=5, # in seconds, to auto-release stuck Notochord notes
+    max_note_len=11, # in seconds, to auto-release stuck Notochord notes
     max_time=None, # max time between events
     nominal_time=True, #DEPRECATED
 
@@ -321,7 +321,7 @@ def main(
     print = notochord.print = iipyper.print = tui.print
     ###
 
-    print(f'{sf_inst_ranges=}')
+    # print(f'{sf_inst_ranges=}')
 
     if not nominal_time:
         print('nominal_time is deprecated; nominal_time=False now sets lateness_margin to 0')
@@ -356,15 +356,28 @@ def main(
 
     # defaults
     def default_config_channel(i):
-        return {'mode':'auto', 'inst':257, 'mute':True, 'mono':False, 'source':max(1,i-1), 'note_shift':0}
+        """default values for presets
+        all fields should appear here, even if default is None
+        """
+        return {
+            'mode':'auto', 
+            'inst':257, 
+            'mute':True, 
+            'source':max(1,i-1), 
+            'note_shift':0,
+            'duration':None,
+            'poly':None,
+            'range':None,
+            'transpose':None
+            }
     
     # convert MIDI channels to int
     # print(presets)
     for p in presets:
         p['channel'] = {
-            int(k):{**default_config_channel(i), **v} 
+            int(k):{**default_config_channel(int(k)), **v} 
             for i,(k,v) in enumerate(p['channel'].items(),1)}
-    
+          
     # load notochord model
     try:
         noto = Notochord.from_checkpoint(checkpoint)
@@ -460,7 +473,7 @@ def main(
         for v in config.values():
             i = v['inst']
             if i in insts:
-                s = set(range(*v.get('range', get_range(i))))
+                s = set(range(*(v.get('range') or get_range(i))))
                 if i in r:
                     r[i] |= s
                 else:
@@ -472,6 +485,7 @@ def main(
                 return k
         return None
     def channel_followers(chan):
+        # print(f'channel_followers {chan=} {config=}')
         # return channel of all 'follow' voices with given source
         return [
             k for k,v in config.items() 
@@ -643,8 +657,8 @@ def main(
             with profile('\tnoto.feed', print=print, enable=profiler>1):
                 noto.feed(**event)
 
-        status['follow_depth'] += 1
         with profile('\t'*status['follow_depth']+'follow.event', print=print, enable=profiler>1):
+            status['follow_depth'] += 1
             follow_event(event, channel)
             status['follow_depth'] -= 1
 
@@ -657,6 +671,7 @@ def main(
         dt = 0
 
         if source_vel > 0:
+
             # NoteOn
             for noto_channel in channel_followers(source_channel):
                 cfg = config[noto_channel]
@@ -664,8 +679,8 @@ def main(
                 if cfg.get('mute', False): continue
 
                 noto_inst = cfg['inst']
-                min_x, max_x = cfg.get('transpose', (-128,128))
-                lo, hi = cfg.get('range', (0,127))
+                min_x, max_x = cfg.get('transpose') or (-128,128)
+                lo, hi = cfg.get('range') or (0,127)
 
                 already_playing = {
                     note.pitch for note in history.notes if noto_inst==note.inst}
@@ -679,14 +694,14 @@ def main(
 
                 if len(pitches)==0:
                     # edge case: no possible pitch
-                    print(f'skipping {noto_channel=}, no pitches available')
+                    print(f'skipping follow {noto_channel=}, no pitches available')
                     print(f'{pitch_range} minus {source_pitch} minus {already_playing}')
                     continue
                 elif len(pitches)==1:
                     # edge case: there is exactly one possible pitch
-                    h = dict(
+                    pending.set(dict(
                         inst=noto_inst, pitch=list(pitches)[0], 
-                        time=0, vel=source_vel)
+                        time=dt, vel=source_vel))
                 else:
                     # notochord chooses pitch
                     pending.set(noto.query(
@@ -782,33 +797,31 @@ def main(
             predict_follow=predict_follow,
             immediate=False):
         
+        # NOTE: replaced this with duration contraints;
+        # should test more before deleting
         # check for stuck notes
         # and prioritize ending those
-        for (_, inst, pitch), note_data in history.note_data.items():
-            dur = note_data['duration'].read()
-            if (
-                inst in mode_insts('auto') 
-                and dur > max_note_len*(.1+controls.get('steer_duration', 1))
-                ):
-                # query for the end of a note with flexible timing
-                # with profile('query', print=print, enable=profiler):
-                t = pending.time_since()
-                mt = max(t, min(max_time or np.inf, t+0.2))
-                pending.set(noto.query(
-                    next_inst=inst, next_pitch=pitch,
-                    next_vel=0, min_time=t, max_time=mt))
-                print(f'END STUCK NOTE {inst=},{pitch=}')
-                return
+        # for (_, inst, pitch), note_data in history.note_data.items():
+        #     dur = note_data['duration'].read()
+        #     if (
+        #         inst in mode_insts('auto') 
+        #         and dur > max_note_len*(.1+controls.get('steer_duration', 1))
+        #         ):
+        #         # query for the end of a note with flexible timing
+        #         # with profile('query', print=print, enable=profiler):
+        #         t = pending.time_since()
+        #         mt = max(t, min(max_time or np.inf, t+0.2))
+        #         pending.set(noto.query(
+        #             next_inst=inst, next_pitch=pitch,
+        #             next_vel=0, min_time=t, max_time=mt))
+        #         print(f'END STUCK NOTE {inst=},{pitch=},{dur=}')
+        #         return
 
         counts = defaultdict(int)
         for i,c in history.inst_counts(n=n_recent).items():
             counts[i] = c
         # print(f'{counts=}')
 
-        # if using nominal time,
-        # *subtract* estimated feed latency from min_time; unless immediately 
-        # querying following a previous event, in which case let min_time be 0
-        # if using actual time, *add* estimated query latency
         if immediate:
             min_time = 0
         else:
@@ -893,10 +906,12 @@ def main(
             c = auto_inst_channel(i)
             if c is None: continue
             cfg = config[c]
-            if cfg is not None and 'poly' in cfg:
+            if cfg is not None and cfg.get('poly') is not None:
                 min_polyphony[i], max_polyphony[i] = cfg['poly']
-            if cfg is not None and 'duration' in cfg:
+            if cfg is not None and cfg.get('duration') is not None:
                 min_duration[i], max_duration[i] = cfg['duration']
+            elif max_note_len is not None:
+                max_duration[i] = max_note_len
 
         # print(note_on_map, note_off_map)
 
@@ -920,7 +935,7 @@ def main(
                     no_steer=mode_insts(('input','follow'), allow_muted=False),
                 ))
         except Exception:
-            print(f'WARNING: query failed. {allowed_insts=} {note_on_map=}')
+            print(f'WARNING: query failed. {config=} {allowed_insts=} {note_on_map=}')
             print(f'{noto.held_notes=}')
             traceback.print_exc(file=tui)
             pending.clear()
@@ -1310,16 +1325,21 @@ def main(
         print(f'load preset: {p}')
         preset = presets[p]['channel']
         for c in range(1,17):    
-            if c not in config:
-                config[c] = default_config_channel(c)
+            # if c not in config:
+            #     config[c] = default_config_channel(c)
             if c not in preset:
                 set_mute(c, True, update=False, query=False)
             else:
                 # NOTE: config should *not* be updated before calling set_* 
-                v = {**preset[c]}
+                v = default_config_channel(c)
+                # print(f'pre {v=}')
+                # print(f'{c=} {preset=}')
+                v.update(preset.get(c, {}))
+                print(f'post {v=}')
                 set_mode(c, v.pop('mode'), update=False)
                 set_inst(c, v.pop('inst'), update=False, query=False)
                 set_mute(c, v.pop('mute'), update=False, query=False)
+                # print(f'final {v=}')
                 config[c].update(v)
         update_config()
         if pending.gate:
@@ -1688,4 +1708,4 @@ def inst_label(i):
 ### end def TUI components###
 
 if __name__=='__main__':
-    run(main)
+    run(main, debugger=True)

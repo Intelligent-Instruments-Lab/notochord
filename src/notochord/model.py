@@ -746,7 +746,7 @@ class Notochord(nn.Module):
             (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
             for i,ps in note_off_map.items()
             for p in ps}
-        print(f'{soonest_off=}')
+        # print(f'{soonest_off=}')
 
         soonest_off_any = min(soonest_off.values(), default=0)
         
