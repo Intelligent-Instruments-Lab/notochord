@@ -531,13 +531,15 @@ def main(
     class Prediction:
         def __init__(self):
             self.gate = not initial_mute
+            self.reset()
+        def reset(self):
+            self.last_event_time = None
+            self.lateness = 0
+            self.cum_end_prob = 0
             self.clear()
         def clear(self):
             self.event = None
-            self.last_event_time = None
             self.next_event_time = None
-            self.lateness = 0
-            self.cum_end_prob = 0
             tui.defer(prediction=None)
         def occurred(self):
             self.event = None
@@ -734,7 +736,7 @@ def main(
         status['reset_time'] = now()
 
         # cancel pending predictions
-        pending.clear()
+        pending.reset()
         
         # end Notochord held notes
         # skip feeding for speed, since notochord gets reset anyway
@@ -769,13 +771,14 @@ def main(
             # if sustain:
                 # auto_query()
             return
-        # cancel pending predictions
-        pending.clear()
+        else:
+            # cancel pending predictions
+            end_held(memo='mute')
+            pending.clear()
 
         if sustain:
             return
         
-        end_held(memo='mute')
         
     def end_held(feed=True, channel=None, memo=None):
         # end+feed all held notes
@@ -987,14 +990,11 @@ def main(
 
     def dispatch_action(k):   
         if k=='reset':
-            # noto_reset()
-            action_queue.append(ft.partial(noto_reset))
+            action_queue.append(noto_reset)
         elif k=='query':
-            # auto_query()
-            action_queue.append(ft.partial(auto_query))
+            action_queue.append(auto_query)
         elif k=='mute':
-            # noto_mute()
-            action_queue.append(ft.partial(noto_mute))
+            action_queue.append(noto_mute)
         else:
             print(f'WARNING: action "{k}" not recognized')
 
@@ -1056,7 +1056,7 @@ def main(
 
         cfg = config[channel]
 
-        if channel not in mode_chans('input'):
+        if not (punch_in or channel not in mode_chans('input')):
             print(f'WARNING: ignoring MIDI {msg} on non-input channel')
             return
         
@@ -1096,8 +1096,10 @@ def main(
         # with lock:
         pending.set({'inst':inst, 'pitch':pitch, 'vel':vel}, display=False)
         play_event(channel=channel, send=thru, tag='PLAYER')
+        pending.clear()
         # query for new prediction
-        auto_query(immediate=True)  
+        if pending.gate:
+            auto_query(immediate=True)  
 
     def auto_event():
         # print('auto_event')
@@ -1388,23 +1390,19 @@ def main(
 
     @tui.set_action
     def mute():
-        # noto_mute()
-        action_queue.append(ft.partial(noto_mute))
+        action_queue.append(noto_mute)
 
     @tui.set_action
     def sustain():
-        # noto_mute(sustain=True)
         action_queue.append(ft.partial(noto_mute, sustain=True))
     
     @tui.set_action
     def reset():
-        # noto_reset()
-        action_queue.append(ft.partial(noto_reset))
+        action_queue.append(noto_reset)
     
     @tui.set_action
     def query():
-        # auto_query()
-        action_queue.append(ft.partial(auto_query))
+        action_queue.append(auto_query)
 
     ### TUI classes which close over variables defined in main
 
