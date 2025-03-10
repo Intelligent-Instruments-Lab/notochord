@@ -1332,14 +1332,10 @@ def main(
             else:
                 # NOTE: config should *not* be updated before calling set_* 
                 v = default_config_channel(c)
-                # print(f'pre {v=}')
-                # print(f'{c=} {preset=}')
                 v.update(preset.get(c, {}))
-                print(f'post {v=}')
                 set_mode(c, v.pop('mode'), update=False)
                 set_inst(c, v.pop('inst'), update=False, query=False)
                 set_mute(c, v.pop('mute'), update=False, query=False)
-                # print(f'final {v=}')
                 config[c].update(v)
         update_config()
         if pending.gate:
@@ -1708,4 +1704,4 @@ def inst_label(i):
 ### end def TUI components###
 
 if __name__=='__main__':
-    run(main, debugger=True)
+    run(main)

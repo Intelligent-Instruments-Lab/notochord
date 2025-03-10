@@ -715,6 +715,9 @@ class Notochord(nn.Module):
                 note_on_map: possible note-ons as {instrument: [pitch]} 
                 note_off_map: possible note-offs as {instrument: [pitch]} 
         """
+        # NOTE: have to add epsilon when comparing sampled times,
+        # or else rounding error can cause discrepancy 
+        eps = 1e-5
         min_time = min_time or 0
         max_time = max_time or torch.inf
 
@@ -747,8 +750,16 @@ class Notochord(nn.Module):
             for i,ps in note_off_map.items()
             for p in ps}
         # print(f'{soonest_off=}')
-
         soonest_off_any = min(soonest_off.values(), default=0)
+        
+        # in case where only note off is allowed (likely due to max_polyphony)
+        # min_duration and max_time can be unsatisfiable
+        # break the max_time constraint in that case
+        no_on = all(len(ps)==0 for ps in note_on_map.values())
+        if no_on:
+            if soonest_off_any > max_time:
+                max_time = soonest_off_any + eps
+                print(f'breaking max_time constraint -> {max_time}s')
         
         # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
         latest_event = max_time
@@ -770,8 +781,6 @@ class Notochord(nn.Module):
                 continue
 
         # print(f'post {note_off_map=}') ###DEBUG
-
-        no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
         # print(f'{no_on=} {no_off=}')
 
@@ -779,9 +788,6 @@ class Notochord(nn.Module):
             raise ValueError(f"""
                 no possible notes {note_on_map=} {note_off_map=}""")
 
-        # NOTE: have to add epsilon when comparing sampled times,
-        # or else rounding error can cause discrepancy 
-        eps = 1e-5
         def insts(e):
             if e['vel'] > 0:
                 return note_on_map
@@ -861,6 +867,7 @@ class Notochord(nn.Module):
                 note_on_map: possible note-ons as {instrument: [pitch]} 
                 note_off_map: possible note-offs as {instrument: [pitch]} 
         """
+        eps = 1e-5
         min_time = min_time or 0
         max_time = max_time or torch.inf
 
@@ -883,19 +890,36 @@ class Notochord(nn.Module):
             for i,ps in note_off_map.items()
             for p in ps}
         # print(f'{soonest_off=}')
+
+        # in case where only note off is allowed (likely due to max_polyphony)
+        # min_duration and max_time can be unsatisfiable
+        # break the max_time constraint in that case
+        no_on = all(len(ps)==0 for ps in note_on_map.values())
+        if no_on:
+            soonest_off_any = min(soonest_off.values(), default=0)
+            if soonest_off_any > max_time:
+                max_time = soonest_off_any + eps
+                print(f'breaking max_time constraint -> {max_time}s')
         
         # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
+        # or the global max interevent time, if shorter
         latest_event = max_time
         for (i,p),t in self.held_notes.items():
             latest_event = min(latest_event, max_dur(i) - t)
         # slip to accomodate global constraint
         latest_event = max(min_time, latest_event)
 
-        # if latest_event is <= min_time, probably means some notes are already over time and should be prioritized to end
+        # if latest_event is <= min_time, probably means one of two things:
+        # 1. some notes are already over time and should be prioritized to end
         # we don't want noteoffs which would prevent ending a different note on time -- except in the case where the soonest noteoff is already late according to global min_time; any such noteOff is valid
         # since both latest_event and soonest_off are clipped to min_time --
         # we can exclude noteOffs when soonest_off > latest_event,
         # but allow soonest_off==latest_event
+        # 2. polyphony+duration contraints contradict max_time
+        # i.e. solo monophonic instrument has min_duration = 5, 
+        # but max_time is 3 -- nothing to do after 3 seconds
+        # ought to break the max_time constraint in this case;
+        # can set max_time = max(max_time, min(remaining min duration of held notes))
 
         # remove impossible note offs
         # (i.e. soonest possible note-off is after the latest possible event)
@@ -907,11 +931,15 @@ class Notochord(nn.Module):
                 note_off_map.pop(i)
                 continue
 
-        no_on = all(len(ps)==0 for ps in note_on_map.values())
         no_off = all(len(ps)==0 for ps in note_off_map.values())
         # print(f'{no_on=} {no_off=}')
 
         if no_on and no_off:
+            # if len(soonest_off):
+            #     i_off,p_off = min(soonest_off, key=soonest_off.__getitem__)
+            #     note_off_map = {i_off:[p_off]}
+            #     print('breaking contraint to allow note off')
+            # else:
             raise ValueError(f"""
                 no possible notes {note_on_map=} {note_off_map=}""")
 
