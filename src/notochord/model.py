@@ -6,6 +6,7 @@ from pathlib import Path
 import hashlib
 import json
 import copy
+import traceback
 
 import mido
 from tqdm import tqdm
@@ -938,22 +939,26 @@ class Notochord(nn.Module):
             # if len(soonest_off):
             #     i_off,p_off = min(soonest_off, key=soonest_off.__getitem__)
             #     note_off_map = {i_off:[p_off]}
-            #     print('breaking contraint to allow note off')
+            #     print('breaking constraint to allow note off')
             # else:
             raise ValueError(f"""
                 no possible notes {note_on_map=} {note_off_map=}""")
 
         def note_map(e):
-            # print(f'{e=}')
-            if e['vel'] > 0:
-                m = note_on_map
-            else:
-                m = note_off_map
-            i = e.get('inst')
-            if i is not None:
-                m = m[i]
+            try:
+                if e['vel'] > 0:
+                    m = note_on_map
+                else:
+                    m = note_off_map
+                i = e.get('inst')
+                if i is not None:
+                    m = m[i]
+                return m
+            except Exception:
+                traceback.print_exc()
+                print(f'{e=} {note_off_map=} {note_on_map=}')
+                raise
             # print(f'{m=}')
-            return m
                     
         w = 1 if steer_density is None else 2**(steer_density*2-1)
         
@@ -971,8 +976,8 @@ class Notochord(nn.Module):
             then=lambda e: Query(
                 'inst', 
                 whitelist={
-                    k:inst_weights.get(k,1) if e['vel'] > 0 else 1 
-                    for k in note_map(e)},
+                    i:inst_weights.get(i,1) if e['vel'] > 0 else 1 
+                    for i in note_map(e)},
                 then=lambda e: Query(
                     'pitch', 
                     whitelist=note_map(e),
