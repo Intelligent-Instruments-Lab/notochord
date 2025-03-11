@@ -58,13 +58,12 @@ import numpy as np
 import toml_file
 import mido
 from tqdm import tqdm
-import joblib
 
 import torch
 torch.set_num_threads(1)
 
 import iipyper, notochord
-from notochord import Notochord, NotoPerformance
+from notochord import Notochord, NotoPerformance, NoPossibleEvents
 from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lock
 
 from rich.panel import Panel
@@ -129,7 +128,7 @@ def main(
     lateness_margin=100e-3, # when events are playing later than this, slow down
     soundfont=None,
     limit_input=None,
-    thru_vel_offset=None,
+    # thru_vel_offset=None,
     profiler=0,
     wipe_presets=False,
     ):
@@ -533,6 +532,7 @@ def main(
             self.gate = not initial_mute
             self.reset()
         def reset(self):
+            self.stopped = False
             self.last_event_time = None
             self.lateness = 0
             self.cum_end_prob = 0
@@ -540,18 +540,19 @@ def main(
         def clear(self):
             self.event = None
             self.next_event_time = None
-            tui.defer(prediction=None)
+            # tui.defer(prediction=None)
         def occurred(self):
-            self.event = None
             self.last_event_time = self.next_event_time
-        def set(self, event, display=True):
+            self.clear()
+        def set(self, event):
+            self.stopped = False
             if event.get('time') is None:
                 event['time'] = self.time_since()
             self.event = event
             self.next_event_time = event['time'] + (
                 self.last_event_time or now())
-            if display:
-                tui.defer(prediction=pending.event)
+            # if display:
+                # tui.defer(prediction=pending.event)
             # print(pending.event)
             # print(f'{now()=} {self.next_event_time=}')
         def time_since(self):
@@ -579,9 +580,13 @@ def main(
     pending = Prediction()    
 
     # tracks held notes, recently played instruments, etc
+    # NOTE: Notochord now tracks held notes,
+    # but NotoPerformance also tracks channels,
+    # lets you attach user data to notes,
+    # remembers past events, and contains other utilities
     history = NotoPerformance()
 
-    status = {'follow_depth':0, 'reset_time':now()}
+    status = {'reset_time':now()}
 
     action_queue = []
 
@@ -596,6 +601,7 @@ def main(
             s += f' ({memo})'
         tui.defer(note=s)
 
+    # @profile(print=print, enable=profiler)
     def send_midi(note, velocity, channel):
         kind = 'note_on' if velocity > 0 else 'note_off'
         cfg = config[channel]
@@ -617,6 +623,7 @@ def main(
 
         midi.send(kind, note=note, velocity=velocity, channel=channel-1, port=port)
 
+    @profile(print=print, enable=profiler)
     def play_event(
             channel, 
             parent=None, # parent note as (channel, inst, pitch)
@@ -624,47 +631,42 @@ def main(
             send=True, 
             tag=None, memo=None):
         """realize an event as MIDI, terminal display, and Notochord update"""
-        event = pending.event
-        if event is None:
-            print("WARNING: play_event on null event")
-            return
-        time_until = pending.time_until()
-        pending.lateness = -time_until # set at the time of playing
-        if time_until < -0.1:
-            # print(f'late {-time_until} {pending.last_event_time=} {pending.next_event_time=} {event.get("time")=} {now()=}')
-            print(f'late {-time_until} at {now()=}')
-        pending.occurred()
-        # normalize values
-        vel = event['vel'] = math.ceil(event['vel'])
+        with profile('rest', print=print, enable=profiler):
+            event = pending.event
+            if event is None:
+                print("WARNING: play_event on null event")
+                return
+            time_until = pending.time_until()
+            pending.lateness = -time_until # set at the time of playing
+            # if time_until < 10e-3:
+                # print(f'late {-time_until} at {now()=}')
+            pending.occurred()
+            # normalize values
+            vel = event['vel'] = math.ceil(event['vel'])
 
-        # send out as MIDI
-        if send:
-            with profile('\tmidi.send', print=print, enable=profiler>1):
+            # send out as MIDI
+            if send:
                 send_midi(event['pitch'], vel, channel)
 
-        # print
-        with profile('\tdisplay_event', print=print, enable=profiler>1):
-            display_event(
-                tag, memo=memo, channel=channel, **event)
+            # print
+            display_event(tag, memo=memo, channel=channel, **event)
 
         if feed:
             # feed to NotoPerformance
             # put a stopwatch in the held_note_data field for tracking note length
-            with profile('\thistory.feed', print=print, enable=profiler>1):
+            with profile('history.feed', print=print, enable=profiler>1):
                 history.feed(held_note_data={
                     'duration':Stopwatch(),
                     'parent':parent
                     }, channel=channel, **event)
             # feed to model
-            with profile('\tnoto.feed', print=print, enable=profiler>1):
+            with profile('noto.feed', print=print, enable=profiler):
                 noto.feed(**event)
 
-        with profile('\t'*status['follow_depth']+'follow.event', print=print, enable=profiler>1):
-            status['follow_depth'] += 1
-            follow_event(event, channel)
-            status['follow_depth'] -= 1
+        follow_event(event, channel, feed=feed)
 
-    def follow_event(source_event, source_channel):
+    @profile(print=print, enable=profiler)
+    def follow_event(source_event, source_channel, feed=True):
         source_vel = source_event['vel']
         source_pitch = source_event['pitch']
         source_inst = source_event['inst']
@@ -685,7 +687,9 @@ def main(
                 lo, hi = cfg.get('range') or (0,127)
 
                 already_playing = {
-                    note.pitch for note in history.notes if noto_inst==note.inst}
+                    p for i,p in noto.held_notes if noto_inst==i}
+                # already_playing = {
+                #     note.pitch for note in history.notes if noto_inst==note.inst}
                 # print(f'{already_playing=}')
 
                 pitch_range = range(
@@ -706,12 +710,13 @@ def main(
                         time=dt, vel=source_vel))
                 else:
                     # notochord chooses pitch
-                    pending.set(noto.query(
-                        next_inst=noto_inst, next_time=dt, next_vel=source_vel,
-                        include_pitch=pitches))
+                    with profile('noto.query', print=print, enable=profiler):
+                        pending.set(noto.query(
+                            next_inst=noto_inst, next_time=dt, next_vel=source_vel,
+                            include_pitch=pitches))
                     
                 play_event(
-                    noto_channel, 
+                    noto_channel, feed=feed,
                     parent=source_k, tag='NOTO', memo='follow')
         # NoteOff
         else:
@@ -726,10 +731,11 @@ def main(
             for noto_channel, noto_inst, noto_pitch in dependents:
                 pending.set(dict(
                     inst=noto_inst, pitch=noto_pitch, time=dt, vel=0))
-                play_event(noto_channel,tag='NOTO', memo='follow')
+                play_event(noto_channel, feed=feed, tag='NOTO', memo='follow')
 
-    @lock
-    def noto_reset(query=True):
+    # @lock
+    @profile(print=print, enable=profiler)
+    def noto_reset():
         """reset Notochord and end all of its held notes"""
         print('RESET')
 
@@ -749,11 +755,8 @@ def main(
 
         # TODO: feed note-ons from any held input/follower notes?
 
-        # query the fresh notochord for a new prediction
-        if query and pending.gate:
-            auto_query(immediate=True)
-
-    @lock
+    # @lock
+    @profile(print=print, enable=profiler)
     def noto_mute(sustain=False):
         tui.query_one('#mute').label = 'UNMUTE' if pending.gate else 'MUTE'
         # if sustain:
@@ -765,24 +768,16 @@ def main(
             print('END SUSTAIN' if pending.gate else 'SUSTAIN')
         else:
             print('UNMUTE' if pending.gate else 'MUTE')
+
         # if unmuting, we're done
-        if pending.gate:
-            auto_query()
-            # if sustain:
-                # auto_query()
-            return
-        else:
+        if not pending.gate:
             # cancel pending predictions
             end_held(memo='mute')
             pending.clear()
-
-        if sustain:
-            return
         
-        
+    @profile(print=print, enable=profiler)    
     def end_held(feed=True, channel=None, memo=None):
         # end+feed all held notes
-        # for (chan,inst,pitch) in history.note_triples:
         channels = mode_chans('auto') if channel is None else [channel]
         ended_any = False
         for note in history.notes:
@@ -795,12 +790,13 @@ def main(
 
     # query Notochord for a new next event
     # @lock
+    @profile(print=print, enable=profiler)
     def auto_query(
             predict_input=predict_input, 
             predict_follow=predict_follow,
             immediate=False):
         
-        # NOTE: replaced this with duration contraints;
+        # NOTE: replaced this with duration constraints;
         # should test more before deleting
         # check for stuck notes
         # and prioritize ending those
@@ -820,16 +816,17 @@ def main(
         #         print(f'END STUCK NOTE {inst=},{pitch=},{dur=}')
         #         return
 
-        counts = defaultdict(int)
-        for i,c in history.inst_counts(n=n_recent).items():
-            counts[i] = c
-        # print(f'{counts=}')
-
         if immediate:
+            # sampling immediately after realizing an event
             min_time = 0
         else:
-            time_offset = -estimated_feed_latency
-            min_time = pending.time_since() + time_offset
+            if pending.event is not None and not pending.is_auto():
+                # re-sampling ahead after sampling an input or follow voice
+                min_time = pending.event['time']
+            else:
+                # otherwise sampling after some delay
+                min_time = pending.time_since()
+            min_time = min_time-estimated_feed_latency
         # print(f'{immediate=} {min_time=}')
 
         if pending.lateness > lateness_margin:
@@ -870,6 +867,10 @@ def main(
         # balance_sample: note-ons only from instruments which have played less
         inst_weights = None
         if balance_sample:
+            counts = defaultdict(int)
+            for i,c in history.inst_counts(n=n_recent).items():
+                counts[i] = c
+            # print(f'{counts=}')
             inst_weights = {}
             mc = max(counts.values()) if len(counts) else 0
             for i in allowed_insts:
@@ -878,7 +879,6 @@ def main(
                     inst_weights[i] = np.exp(max(0, mc - counts[i] - n_margin))
                 else:
                     inst_weights[i] = 1.
-
         # print(f'{inst_weights=}')
 
         # VTIP is better for time interventions,
@@ -891,6 +891,7 @@ def main(
             # print('VIPT')
         # query_method = noto.query_vipt ### DEBUG
         # query_method = noto.query_vtip ### DEBUG
+        query_method = profile(print=print, enable=profiler)(query_method)
 
         # print(f'considering {insts} for note_on')
         # use only currently selected instruments
@@ -921,27 +922,32 @@ def main(
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
         try:
-            with profile('\tquery_method', print=print, enable=profiler>1):
-                pending.set(query_method(
-                    note_on_map, #note_off_map,
-                    min_polyphony=min_polyphony, max_polyphony=max_polyphony,
-                    min_duration=min_duration, max_duration=max_duration,
-                    min_time=min_time, max_time=max_t,
-                    min_vel=min_vel, max_vel=max_vel,
-                    truncate_quantile_time=tqt,
-                    truncate_quantile_pitch=tqp,
-                    truncate_quantile_vel=tqv,
-                    rhythm_temp=rhythm_temp,
-                    timing_temp=timing_temp,
-                    steer_density=steer_density,
-                    inst_weights=inst_weights,
-                    no_steer=mode_insts(('input','follow'), allow_muted=False),
-                ))
+            pending.set(query_method(
+                note_on_map, #note_off_map,
+                min_polyphony=min_polyphony, max_polyphony=max_polyphony,
+                min_duration=min_duration, max_duration=max_duration,
+                min_time=min_time, max_time=max_t,
+                min_vel=min_vel, max_vel=max_vel,
+                truncate_quantile_time=tqt,
+                truncate_quantile_pitch=tqp,
+                truncate_quantile_vel=tqv,
+                rhythm_temp=rhythm_temp,
+                timing_temp=timing_temp,
+                steer_density=steer_density,
+                inst_weights=inst_weights,
+                no_steer=mode_insts(('input','follow'), allow_muted=False),
+            ))
+        except NoPossibleEvents:
+            pass
+            # print(f'stopping; no possible events')
+            # pending.stopped = True
+            # pending.clear()
         except Exception:
-            print(f'WARNING: query failed. {config=} {allowed_insts=} {note_on_map=}')
+            print(f'WARNING: query failed. {allowed_insts=} {note_on_map=}')
             print(f'{noto.held_notes=}')
+            print(f'{config=}')
             traceback.print_exc(file=tui)
-            pending.clear()
+            # pending.clear()
 
     #### MIDI handling
 
@@ -951,12 +957,17 @@ def main(
         def _(msg):
             print(msg)
 
-    # @midi.handle(type='program_change')
-    # def _(msg):
-        # """
-        # Program change events set GM instruments on the corresponding channel
-        # """
-        # raise NotImplementedError
+    @midi.handle(type='program_change')
+    def _(msg):
+        """
+        TODO:Program change events set GM instruments on the corresponding channel
+        """
+        # c = msg.channel+1
+        # c = input_channel_map.get(c, c)
+        # i = msg.program+1
+        # action_queue.append(ft.partial(set_inst(c,i)))
+        # if thru:
+        raise NotImplementedError
 
     @midi.handle(type='pitchwheel')
     def _(msg):
@@ -1006,7 +1017,6 @@ def main(
         CC 02: steer density (>64 more simultaneous notes, <64 fewer)
         CC 03: steer rate (>64 more events, <64 fewer)
         """
-
         if msg.control in control_cc:
             ctrl = control_cc[msg.control]
             name = ctrl['name']
@@ -1056,7 +1066,7 @@ def main(
 
         cfg = config[channel]
 
-        if not (punch_in or channel not in mode_chans('input')):
+        if not (punch_in or channel in mode_chans('input')):
             print(f'WARNING: ignoring MIDI {msg} on non-input channel')
             return
         
@@ -1092,15 +1102,10 @@ def main(
 
     def do_note_input(channel, inst, pitch, vel):
         # feed event to Notochord
-        # with profile('feed', print=print, enable=profiler):
-        # with lock:
-        pending.set({'inst':inst, 'pitch':pitch, 'vel':vel}, display=False)
+        pending.set({'inst':inst, 'pitch':pitch, 'vel':vel})
         play_event(channel=channel, send=thru, tag='PLAYER')
-        pending.clear()
-        # query for new prediction
-        if pending.gate:
-            auto_query(immediate=True)  
 
+    @profile(print=print, enable=profiler)
     def auto_event():
         # print('auto_event')
         # 'auto' event happens:
@@ -1110,10 +1115,10 @@ def main(
         if chan is None:
             raise ValueError(f"channel not found for instrument {inst}")
 
+        # shouldn't happen, but prevent
         # note on which is already playing or note off which is not
-
-        if (vel>0) == ((inst, pitch) in history.note_pairs): 
-            print(f're-query for invalid {vel=}, {inst=}, {pitch=}')
+        if (vel>0) == ((inst, pitch) in noto.held_notes): 
+            print(f'WARNING: re-query for invalid {vel=}, {inst=}, {pitch=}')
             auto_query()
             return
                 
@@ -1131,13 +1136,12 @@ def main(
         play_event(channel=chan, tag='NOTO')
 
         if do_reset:
-            noto_reset(query=not do_stop)
+            noto_reset()
         elif do_stop:
             end_held(memo='stop on end')
-            pending.clear()
+            pending.stopped = True
 
-        return do_stop
-
+    @profile(print=print, enable=profiler)
     def maybe_punch_out():
         none_held = set(mode_chans('input'))
         for c,_,_ in history.notes:
@@ -1153,55 +1157,64 @@ def main(
                 set_mode(c, 'auto')
 
     @repeat(lock=True, err_file=tui)
+    # @profile(print=print, enable=profiler)
     def _():
-        """Loop, checking if predicted next event happens"""
-        # check if current prediction has passed
-        # time_until = pending.time_until()
+        """Loop, process enqueued actions and check if predicted next event happens"""
         # print(f'repeat {time.time()}')
         for _ in range(8): # process multiple actions per tick
             if len(action_queue):
                 # print(action_queue)
                 action_queue.pop(0)()
+        # TODO: immediate query if an input has just happened
+
+        # if there is no predicted event,
+        # or it's not for an auto voice,
+        # sample one:
+        if pending.gate and not pending.stopped and not pending.is_auto():
+            # with profile('auto_query', print=print, enable=profiler):
+            auto_query()
+
+        # if unmuted, predicted event is auto, and its time has passed,
+        # realize it
         if (
-            status['follow_depth']==0 and
             not testing and
             pending.gate and
-            pending.event and
-            # stopwatch.read() > get_dt()
-            # time_until <= 0
+            pending.is_auto() and
             pending.time_until() <= 0
+            # pending.time_until() <= estimated_feed_latency
             ):
-            # if so, check if it is a notochord-controlled instrument
-            if pending.is_auto():
-                # prediction happens
-                with profile('auto_event', print=print, enable=profiler):
-                    do_stop = auto_event()
-                immediate = True
-            else:
-                do_stop = False
-                immediate = False
+            # with profile('auto_event', print=print, enable=profiler):
+            auto_event()
 
+
+            # query for new prediction
+            if not (pending.stopped or debug_query):
+                # with profile('auto_query', print=print, enable=profiler):
+                auto_query(immediate=True)
+        else:
+            # otherwise there is a pause, update the UI with next prediction
+            tui.defer(prediction=pending.event)
             if punch_in:
                 maybe_punch_out()
 
-            # query for new prediction
-            if not (do_stop or debug_query):
-                with profile('auto_query', print=print, enable=profiler):
-                    auto_query(immediate=immediate)
-
+        # TODO note sure if this is needed anymore
         # adaptive time resolution here -- yield to other threads when 
         # next event is not expected, but time precisely when next event
         # is imminent
-        wait = pending.time_until() if pending.is_auto() else 10e-3
+        wait = 10e-3
+        if len(action_queue):
+            wait = 0
+        elif pending.is_auto():
+            wait = pending.time_until()
         # print(f'{wait=}')
         r = max(0, min(10e-3, wait))
-        # print('wait', r)
         return r
 
     @cleanup
     def _():
         """end any remaining notes"""
-        print(f'cleanup: {history.notes=}')
+        print(f'cleanup: {noto.held_notes=}')
+        # TODO: this should run in repeat thread..?
         end_held(feed=False, memo='cleanup')
 
     ### update_* keeps the UI in sync with the state
@@ -1266,14 +1279,16 @@ def main(
         if prev_m=='auto':
             # release held notes
             end_held(channel=c, memo='mode change')
-            if pending.gate:
-                auto_query()
+
+        if m=='auto':
+            # immediately refresh prediction
+            pending.clear()
 
         if update:
             update_config()
 
 
-    def set_inst(c, i, update=True, query=True):
+    def set_inst(c, i, update=True):
         print(f'SET INSTRUMENT {i}')
         if c in config:
             prev_i = config[c]['inst']
@@ -1286,6 +1301,7 @@ def main(
         # end held notes on old instrument
         if config[c]['mode']!='input':
             end_held(channel=c, memo='instrument change')
+            pending.clear()
 
         # send pc if appropriate
         if send_pc:
@@ -1299,25 +1315,17 @@ def main(
         if update:
             update_config()
 
-        if query and pending.gate:
-            auto_query()
-
     # @lock
-    def set_mute(c, b, update=True, query=True):
+    def set_mute(c, b, update=True):
         config[c]['mute'] = b
         if b:
             print(f'mute channel {c}')
             # release held notes
-            ended_any = False
             if config[c]['mode']!='input':
-                ended_any = end_held(channel=c, memo='mute channel')
-
-            if query and pending.gate:
-                auto_query(immediate=ended_any)
+                end_held(channel=c, memo='mute channel')
+                pending.clear()
         else:
             print(f'unmute channel {c}')
-            if query and pending.gate:
-                auto_query()
 
         if update:
             update_config()
@@ -1330,18 +1338,17 @@ def main(
             # if c not in config:
             #     config[c] = default_config_channel(c)
             if c not in preset:
-                set_mute(c, True, update=False, query=False)
+                set_mute(c, True, update=False)
             else:
                 # NOTE: config should *not* be updated before calling set_* 
                 v = default_config_channel(c)
                 v.update(preset.get(c, {}))
                 set_mode(c, v.pop('mode'), update=False)
-                set_inst(c, v.pop('inst'), update=False, query=False)
-                set_mute(c, v.pop('mute'), update=False, query=False)
+                set_inst(c, v.pop('inst'), update=False)
+                set_mute(c, v.pop('mute'), update=False)
                 config[c].update(v)
         update_config()
-        if pending.gate:
-            auto_query()
+
 
     ### action_* runs on key/button press;
     ### invokes cycler / picker logic and schedules set_*

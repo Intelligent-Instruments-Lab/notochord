@@ -24,6 +24,9 @@ from .distributions import CensoredMixtureLogistic, categorical_sample
 
 from .util import arg_to_set, download_url
 
+class NoPossibleEvents(Exception):
+    pass
+
 class Query:
     def __init__(self, modality, cases=None, value=None, then=None, **kw):
         assert (cases is None) or (value is None)
@@ -786,7 +789,7 @@ class Notochord(nn.Module):
         # print(f'{no_on=} {no_off=}')
 
         if no_on and no_off:
-            raise ValueError(f"""
+            raise NoPossibleEvents(f"""
                 no possible notes {note_on_map=} {note_off_map=}""")
 
         def insts(e):
