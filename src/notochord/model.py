@@ -697,27 +697,83 @@ class Notochord(nn.Module):
     # TODO: should be possible to constrain duration per (i,p) pair,
     # not just per instrument?
     def query_vtip(self,
-        note_on_map=None, note_off_map=None,
-        min_time=None, max_time=None, # affecting interevent time (not durations)
-        min_vel=None, max_vel=None, # affecting note on only
-        min_polyphony=None, max_polyphony=None, # scalar or per instrument
-        min_duration=None, max_duration=None, # scalar or per instrument
-        rhythm_temp=None, timing_temp=None,
-        truncate_quantile_time=None,
-        truncate_quantile_pitch=None,
-        truncate_quantile_vel=None,
-        steer_density=None,
-        inst_weights=None,
-        no_steer=None, # TODO? can't steer time per-instrument (t before i)
+        note_on_map:Dict[int,List[int]]|None=None, 
+        note_off_map:Dict[int,List[int]]|None=None,
+        min_time:Number|None=None, max_time:Number|None=None,
+        min_vel:Number|None=None, max_vel:Number|None=None,
+        min_polyphony:Dict[int,int]|int|None=None, 
+        max_polyphony:Dict[int,int]|int|None=None,
+        min_duration:Dict[int,Number]|Number|None=None, 
+        max_duration:Dict[int,Number]|Number|None=None, 
+        rhythm_temp:float=None, timing_temp:float=None,
+        truncate_quantile_time:Tuple[float,float]|None=None,
+        truncate_quantile_pitch:Tuple[float,float]|None=None,
+        truncate_quantile_vel:Tuple[float,float]|None=None,
+        steer_density:float=None,
+        inst_weights:Dict[int,Number]=None,
+        no_steer:List[int]=None,
         ):
         """
-        Query in velocity-time-instrument-pitch order,
-            efficiently truncating the joint distribution to just allowable
-            (velocity>0)/instrument/pitch triples.
+        Query in a fixed velocity->time->instrument->pitch order, sampling all
+        modalities. Because velocity is sampled first, this query method can 
+        automatically prevent double NoteOn or NoteOff. It's also possible to
+        make some more detailed constraints per-instrument compared to `query`,
+        including note duration constraints which can eliminate stuck notes.
 
-            Args:
-                note_on_map: possible note-ons as {instrument: [pitch]} 
-                note_off_map: possible note-offs as {instrument: [pitch]} 
+        query_vipt is similar, but makes different compromises in applying 
+        constraints. VTIP is likely to be better when setting min_time > 0 
+        or otherwise heavily constraing time delta, while VIPT may be better
+        in other cases.
+
+        Args:
+            note_on_map: possible note-ons as {instrument: [pitch]} 
+                defaults to allowing any note. Notes already playing on a given
+                instrument are always excluded.
+            note_off_map: possible note-offs as {instrument: [pitch]}
+                defaults to using only the instruments in note_on_map. 
+                Notes not already playing on a given instrument are 
+                automatically excluded.
+            min_time: global minimum interevent time (default 0)
+            max_time: global maximum interevent time (default no limit)
+            min_vel: global minimum velocity for NoteOn events (default 1)
+            max_vel: global maximum velocity for NoteOn events (default 127)
+            min_polyphony: minimum number of concurrent notes per instrument.
+                (default 0). Can be a dict mapping instrument to value,
+                or a single value for all instruments.
+                When an instrument has <= min polyphony, exclude NoteOffs
+            max_polyphony: minimum number of concurrent notes per instrument.
+                (default no limit). Can be a dict mapping instrument to value,
+                or a single value for all instruments.
+                When an instrument has >= max polyphony, exclude NoteOns.
+            min_duration: minimum note length per instrument (default 0). Can   
+                be a dict mapping instrument to value, or a single value for 
+                all instruments.
+            max_duration: maximum note length per instrument (default 0). Can   
+                be a dict mapping instrument to value, or a single value for 
+                all instruments.
+            rhythm_temp: if not None, apply top_p sampling to the weighting
+                of mixture components. this affects coarse rhythmic patterns;
+                0 is deterministic, 1 is 'natural' according to the model.
+            timing_temp: if not None, apply temperature sampling to the time
+                component. this affects fine timing; 0 is deterministic and 
+                precise, 1 is 'natural' according to the model.
+            truncate_quantile_time: applied after min_time, max_time
+                truncate the remaining delta time distribution by quantile.
+                e.g. truncate_quantile_time=(0.25, 0.75)
+                excludes the shortest and longest 25% of probability mass.
+            truncate_quantile_pitch: truncate the pitch distribution by 
+                quantile. e.g. truncate_quantile_pitch=(0.5, 1) always samples
+                above the median predicted pitch. Ignored for drums.
+            truncate_quantile_vel: truncate the velocity distribution by 
+                quantile. e.g. truncate_quantile_velocity=(0, 0.5) always
+                samples below the median predicted velocity. Affects only NoteOn.
+            steer_density: adjust relative weight of NoteOn and NoteOff.
+                values above 0.5 favor NoteOn, values below 0.5 favor NoteOff.
+            inst_weights: multiplicatively adjust instrument probabilities. 
+                Any instrument not included has a weight of 1. 0 would exclude
+                an instrument completely (but better to do so via note_on_map)
+            no_steer: collection of instruments to exclude from effect of 
+                truncate_quantile_pitch.
         """
         # NOTE: have to add epsilon when comparing sampled times,
         # or else rounding error can cause discrepancy 
@@ -849,27 +905,83 @@ class Notochord(nn.Module):
         )))))
     
     def query_vipt(self,
-        note_on_map=None, note_off_map=None,
-        min_time=None, max_time=None, # affecting interevent time (not durations)
-        min_vel=None, max_vel=None, # affecting note on only
-        min_polyphony=None, max_polyphony=None, # scalar or per instrument
-        min_duration=None, max_duration=None, # scalar or per instrument
-        rhythm_temp=None, timing_temp=None,
-        truncate_quantile_time=None,
-        truncate_quantile_pitch=None,
-        truncate_quantile_vel=None,
-        steer_density=None,
-        inst_weights=None,
-        no_steer=None,
+        note_on_map:Dict[int,List[int]]|None=None, 
+        note_off_map:Dict[int,List[int]]|None=None,
+        min_time:Number|None=None, max_time:Number|None=None,
+        min_vel:Number|None=None, max_vel:Number|None=None,
+        min_polyphony:Dict[int,int]|int|None=None, 
+        max_polyphony:Dict[int,int]|int|None=None,
+        min_duration:Dict[int,Number]|Number|None=None, 
+        max_duration:Dict[int,Number]|Number|None=None, 
+        rhythm_temp:float=None, timing_temp:float=None,
+        truncate_quantile_time:Tuple[float,float]|None=None,
+        truncate_quantile_pitch:Tuple[float,float]|None=None,
+        truncate_quantile_vel:Tuple[float,float]|None=None,
+        steer_density:float=None,
+        inst_weights:Dict[int,Number]=None,
+        no_steer:List[int]=None,
         ):
         """
-        Query in velocity-instrument-pitch-time order,
-            efficiently truncating the joint distribution to just allowable
-            (velocity>0)/instrument/pitch triples.
+        Query in a fixed velocity->instrument->pitch->time order, sampling all
+        modalities. Because velocity is sampled first, this query method can 
+        automatically prevent double noteOn or NoteOff. It's also possible to
+        make some more detailed constraints per-instrument compared to `query`,
+        including note duration constraints which can eliminate stuck notes.
 
-            Args:
-                note_on_map: possible note-ons as {instrument: [pitch]} 
-                note_off_map: possible note-offs as {instrument: [pitch]} 
+        query_vtip is similar, but makes different compromises in applying 
+        constraints. VTIP is likely to be better when setting min_time > 0 
+        or otherwise heavily constraing time delta, while VIPT may be better
+        in other cases.
+
+        Args:
+            note_on_map: possible note-ons as {instrument: [pitch]} 
+                defaults to allowing any note. Notes already playing on a given
+                instrument are always excluded.
+            note_off_map: possible note-offs as {instrument: [pitch]}
+                defaults to using only the instruments in note_on_map. 
+                Notes not already playing on a given instrument are 
+                automatically excluded.
+            min_time: global minimum interevent time (default 0)
+            max_time: global maximum interevent time (default no limit)
+            min_vel: global minimum velocity for NoteOn events (default 1)
+            max_vel: global maximum velocity for NoteOn events (default 127)
+            min_polyphony: minimum number of concurrent notes per instrument.
+                (default 0). Can be a dict mapping instrument to value,
+                or a single value for all instruments.
+                When an instrument has <= min polyphony, exclude NoteOffs
+            max_polyphony: minimum number of concurrent notes per instrument.
+                (default no limit). Can be a dict mapping instrument to value,
+                or a single value for all instruments.
+                When an instrument has >= max polyphony, exclude NoteOns.
+            min_duration: minimum note length per instrument (default 0). Can   
+                be a dict mapping instrument to value, or a single value for 
+                all instruments.
+            max_duration: maximum note length per instrument (default 0). Can   
+                be a dict mapping instrument to value, or a single value for 
+                all instruments.
+            rhythm_temp: if not None, apply top_p sampling to the weighting
+                of mixture components. this affects coarse rhythmic patterns;
+                0 is deterministic, 1 is 'natural' according to the model.
+            timing_temp: if not None, apply temperature sampling to the time
+                component. this affects fine timing; 0 is deterministic and 
+                precise, 1 is 'natural' according to the model.
+            truncate_quantile_time: applied after min_time, max_time
+                truncate the remaining delta time distribution by quantile.
+                e.g. truncate_quantile_time=(0.25, 0.75)
+                excludes the shortest 25% and longest 25% of interevent times.
+            truncate_quantile_pitch: truncate the pitch distribution by 
+                quantile. e.g. truncate_quantile_pitch=(0.5, 1) always samples
+                above the median predicted pitch. Ignored for drums.
+            truncate_quantile_vel: truncate the velocity distribution by 
+                quantile. e.g. truncate_quantile_velocity=(0, 0.5) always
+                samples below the median predicted velocity. Affects only NoteOn.
+            steer_density: adjust relative weight of NoteOn and NoteOff.
+                values above 0.5 favor NoteOn, values below 0.5 favor NoteOff.
+            inst_weights: multiplicatively adjust instrument probabilities. 
+                Any instrument not included has a weight of 1. 0 would exclude
+                an instrument completely (but better to do so via note_on_map)
+            no_steer: collection of instruments to exclude from effect of 
+                truncate_quantile_pitch and truncate_quantile_time.
         """
         eps = 1e-5
         min_time = min_time or 0
@@ -985,11 +1097,11 @@ class Notochord(nn.Module):
                     'pitch', 
                     whitelist=note_map(e),
                     truncate_quantile=(
-                            None if (
-                                e['vel']==0 
-                                or self.is_drum(e['inst']) 
-                                or e['inst'] in no_steer)
-                            else truncate_quantile_pitch),
+                        None if (
+                            e['vel']==0 
+                            or self.is_drum(e['inst']) 
+                            or e['inst'] in no_steer)
+                        else truncate_quantile_pitch),
                     then=lambda e: Query(
                         'time', #'note on' if e['vel']>0 else 'note off',         
                         truncate=(
@@ -1062,29 +1174,28 @@ class Notochord(nn.Module):
             handle:str=None, return_params:bool=False
             ) -> dict:
         """
-        return a prediction for the next note.
+        Sample a prediction for the next MIDI event.
 
-        various constraints on the the next note can be requested.
+        various constraints on the the next event can be requested.
 
         Args:
             # hard constraints
 
-            next_inst: fix a particular instrument for the predicted note.
+            next_inst: fix a particular instrument for the predicted event.
                 sampled values will always condition on fixed values, so passing
                 `next_inst=1`, for example, will make the event appropriate
-                for the piano (instrument 1) to play.
-            next_pitch: fix a particular MIDI number for the predicted note.
+                for the Grand Piano (instrument 1) to play.
+            next_pitch: fix a particular MIDI number for the predicted event.
                 sampled values will always condition on fixed values, so passing
-                `next_pitch=60`, for example, will make the event appropriate
-                for a middle C.
-            next_time: fix a particular delta time for the predicted note.
+                `next_pitch=60`, for example, will make the event a middle C
+                (for melodic instruments) or High Bongo (for drums)
+            next_time: fix a particular delta time for the predicted event.
                 sampled values will always condition on fixed values, so passing
-                `next_time=0`, for example, will make the event appropriate
-                for one which is concurrent with the previous event.
-            next_vel: fix a particular velocity for the predicted note.
+                `next_time=0`, for example, will make the event concurrent with
+                the previous event.
+            next_vel: fix a particular velocity for the predicted event.
                 sampled values will always condition on fixed values, so passing
-                `next_inst=0`, for example, will make the event appropriate
-                for a noteOff (i.e., something which is currently playing).
+                `next_inst=0`, for example, will ensure the event is a noteOff.
                 
             # partial constraints
 
@@ -1118,7 +1229,7 @@ class Notochord(nn.Module):
             truncate_quantile_pitch: applied after include_pitch, exclude_pitch
                 truncate the remaining pitch distribution by quantile.
                 e.g. truncate_quantile_pitch=(0.25, 0.75)
-                excludes the lowest- and highest- pitch 25% of probability mass
+                excludes the lowest and highest 25% of pitches
             index_pitch: if not None, deterministically take the
                 nth most likely pitch instead of sampling.
 
@@ -1127,14 +1238,14 @@ class Notochord(nn.Module):
                 precise, 1 is 'natural' according to the model.
             rhythm_temp: if not None, apply top_p sampling to the weighting
                 of mixture components. this affects coarse rhythmic patterns;
-                0 is deterministic, 1 is 'natural' according to the model
+                0 is deterministic, 1 is 'natural' according to the model.
             truncate_quantile_time: applied after min_time, max_time
                 truncate the remaining delta time distribution by quantile.
                 e.g. truncate_quantile_time=(0.25, 0.75)
-                excludes the soonest- and furthest- 25% of probability mass
+                excludes the shortest 25% and longest 25% of interevent times.
 
-            velocity_temp: if not None, apply temperature sampling to the velocity
-                component.
+            velocity_temp: if not None, apply temperature sampling to the 
+                velocity component.
 
             # multiple predictions
 
