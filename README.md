@@ -5,6 +5,9 @@
 </div>
 
 Notochord is a neural network model for MIDI performances. This package contains the training and inference model implemented in pytorch, as well as interactive MIDI processing apps using iipyper. 
+
+[API Reference](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord)
+
 <!-- Some further examples involving SuperCollider and TidalCycles can be found in the parent repo under `examples`. -->
 
 ## Getting Started
@@ -20,17 +23,17 @@ brew install fluidsynth
 ```
 fluidsynth needs a soundfont to run, like this one: https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view
 
-run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
+You can run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
 
-## Notochord MIDI Apps
+## Notochord Homunculus
 
 Notochord includes several [iipyper](https://github.com/Intelligent-Instruments-Lab/iipyper.git) apps which can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.
 
-The `homunculus` provides a text-based graphical interface to manage multiple input, harmonizing or autonomous notochord channels:
+The `homunculus` provides a text-based graphical interface to manage multiple input, harmonizing or autonomous notochord voices:
 ```
 notochord homunculus
 ```
-You can set the MIDI in and out ports with `--midi-in` and `--midi-out`. If you use a General MIDI synthesizer like fluidsynth, you can add `--send-pc` to also send program change messages.
+You can set the MIDI in and out ports with `--midi-in` and `--midi-out`. If you use a General MIDI synthesizer like fluidsynth, you can add `--send-pc` to also send program change messages. More information in the [Homunculus docs](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/app/homunculus/#notochord.app.homunculus.main), or run `notochord homunculus --help`
 
 If you are using fluidsynth as above, try:
 ```
@@ -39,19 +42,23 @@ notochord homunculus --send-pc --midi-out fluidsynth --thru
 
 Note: on windows, there are no virtual MIDI ports and no system MIDI loopback, so you may need to attach some MIDI devices or run a loopback driver like [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) before starting the app.
 
-There are also two simpler notochord apps: `improviser` and `harmonizer`. The harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
+If you pass homunculus a MIDI file using the `--midi-prompt` flag, it will play as if continuing after the end of that file.
+
+Adding the `--punch-in` flag will automatically switch voices to input mode when MIDI is received and back to auto after some time passes.
+
+<!-- There are also two simpler notochord apps: `improviser` and `harmonizer`. The harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
 ```
 notochord harmonizer
 ```
 try `notochord harmonizer --help`
 to see more options.
 
-Development is now focused on `homunculus`, which is intended to subsume all features of `improviser` and `harmonizer`.
+Development is now focused on `homunculus`, which is intended to subsume all features of `improviser` and `harmonizer`. -->
 
 
 ## Python API
 
-See the docs for `Notochord.feed` and `Notochord.query` for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
+See the docs for [`Notochord.feed`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.feed) and [`Notochord.query`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.query) for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
 
 ## OSC server
 
