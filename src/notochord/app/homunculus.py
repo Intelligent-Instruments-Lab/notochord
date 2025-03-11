@@ -197,8 +197,8 @@ def main(
             ```
             Notes:
             when two channels use the same instrument, one will be converted
-            to an 'anonymous' instrument number (but it will still respect the 
-            chosen instrument when using --send-pc)
+            to an 'anonymous' instrument number (but it will still respect 
+            the chosen instrument when using --send-pc)
 
         preset: 
             preset name (in preset file) to load config from
@@ -235,7 +235,11 @@ def main(
             useful when using a General MIDI synthesizer like fluidsynth.
         dump_midi: 
             if True, print all incoming MIDI for debugging purposes
-
+        suppress_midi_feedback:
+            attempt to allow use of the one loopback port for both input and
+            output, by ignoring any MIDI input which is identical to an output
+            within a few milliseconds.
+            
         balance_sample:
             choose 'auto' voices which have played less recently,
             ensures that all configured instruments will play.
@@ -249,16 +253,22 @@ def main(
         max_time: 
             maximum seconds between predicted events for 'auto' voices.
             default is the Notochord model's maximum (usually 10 seconds).
-        nominal_time: 
-            deprecated. when False, now sets lateness_margin to 0
         lateness_margin:
             when events are playing later than this (in seconds), slow down
+
+        min_vel: mininum velocity (except for noteOffs where vel=0)
+        max_vel: maximum velocity
 
         osc_port: 
             optional. if supplied, listen for OSC to set controls
         osc_host: 
             hostname or IP of OSC sender.
             leave this as empty string to get all traffic on the port
+
+        punch_in: EXPERIMENTAL. this causes all channels to switch between
+            auto and input mode when input is received or not
+        punch_out_after: time in seconds from last input NoteOn to revert to 
+            auto mode
 
         use_tui: 
             run textual UI.
@@ -267,10 +277,20 @@ def main(
             generally should be True for manual input;
             use balance_sample to force 'auto' voices to play. 
             you might want it False if you have a very busy input.
+        predict_follow:
+            ditto for 'follow' voices. less obvious what the correct setting
+            is, but False will be more efficient
 
         wipe_presets:
             if True, replaces your homunulus.toml with the defaults
             (may be useful after updating notochord)
+
+        soundfont: path to a soundfont file from which default instrument 
+            ranges will be loaded
+
+        wipe_presets: CAUTION. replaces your homunculus.toml file with the 
+            default. may fix errors after upgrading. backup your config file
+            if you've been changing it! (`notochord files` to find it)
     """
     if osc_port is not None:
         osc = OSC(osc_host, osc_port)
