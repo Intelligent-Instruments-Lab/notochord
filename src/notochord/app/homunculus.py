@@ -1149,7 +1149,10 @@ def main(
                 none_held.remove(c)
 
         evt = history.events
-        recent_events = evt[evt.wall_time_ns > time.time_ns() - punch_out_after*1e9]
+        recent_events = evt[
+            (evt.vel > 0) &
+            (evt.wall_time_ns > time.time_ns() - punch_out_after*1e9)
+            ]
         for c in none_held:
             # print(recent_events.channel)
             # print(f'{c=} {(c not in recent_events.channel)=}')
