@@ -14,7 +14,7 @@
       
       
       <link rel="icon" href="assets/favicon/favicon.ico">
-      <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.24">
+      <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.26">
     
     
       
@@ -170,7 +170,7 @@
       
     </form>
     <div class="md-search__output">
-      <div class="md-search__scrollwrap" data-md-scrollfix>
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
             Initializing search
@@ -376,9 +376,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notochord-midi-apps" class="md-nav__link">
+  <a href="#notochord-homunculus" class="md-nav__link">
     <span class="md-ellipsis">
-      Notochord MIDI Apps
+      Notochord Homunculus
     </span>
   </a>
   
@@ -813,6 +813,48 @@
   
   
     <li class="md-nav__item">
+      <a href="reference/notochord/app/morse/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Morse
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reference/notochord/app/prompt/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Prompt
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="reference/notochord/app/server/" class="md-nav__link">
         
   
@@ -943,9 +985,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notochord-midi-apps" class="md-nav__link">
+  <a href="#notochord-homunculus" class="md-nav__link">
     <span class="md-ellipsis">
-      Notochord MIDI Apps
+      Notochord Homunculus
     </span>
   </a>
   
@@ -1012,6 +1054,7 @@
 </div>
 
 <p>Notochord is a neural network model for MIDI performances. This package contains the training and inference model implemented in pytorch, as well as interactive MIDI processing apps using iipyper. </p>
+<p><a href="https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord">API Reference</a></p>
 <!-- Some further examples involving SuperCollider and TidalCycles can be found in the parent repo under `examples`. -->
 
 <h2 id="getting-started">Getting Started</h2>
@@ -1022,25 +1065,29 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>brew install fluidsynth
 </span></code></pre></div>
 fluidsynth needs a soundfont to run, like this one: https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view</p>
-<p>run fluidsynth in a terminal. For example, <code>fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'</code></p>
-<h2 id="notochord-midi-apps">Notochord MIDI Apps</h2>
+<p>You can run fluidsynth in a terminal. For example, <code>fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'</code></p>
+<h2 id="notochord-homunculus">Notochord Homunculus</h2>
 <p>Notochord includes several <a href="https://github.com/Intelligent-Instruments-Lab/iipyper.git">iipyper</a> apps which can be run in a terminal. They have a clickable text-mode user interface and connect directly to MIDI ports, so you can wire them up to your controllers, DAW, etc.</p>
-<p>The <code>homunculus</code> provides a text-based graphical interface to manage multiple input, harmonizing or autonomous notochord channels:
+<p>The <code>homunculus</code> provides a text-based graphical interface to manage multiple input, harmonizing or autonomous notochord voices:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>notochord homunculus
 </span></code></pre></div>
-You can set the MIDI in and out ports with <code>--midi-in</code> and <code>--midi-out</code>. If you use a General MIDI synthesizer like fluidsynth, you can add <code>--send-pc</code> to also send program change messages.</p>
+You can set the MIDI in and out ports with <code>--midi-in</code> and <code>--midi-out</code>. If you use a General MIDI synthesizer like fluidsynth, you can add <code>--send-pc</code> to also send program change messages. More information in the <a href="https://intelligent-instruments-lab.github.io/notochord/reference/notochord/app/homunculus/#notochord.app.homunculus.main">Homunculus docs</a>, or run <code>notochord homunculus --help</code></p>
 <p>If you are using fluidsynth as above, try:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>notochord homunculus --send-pc --midi-out fluidsynth --thru
 </span></code></pre></div></p>
 <p>Note: on windows, there are no virtual MIDI ports and no system MIDI loopback, so you may need to attach some MIDI devices or run a loopback driver like <a href="https://www.tobias-erichsen.de/software/loopmidi.html">loopMIDI</a> before starting the app.</p>
-<p>There are also two simpler notochord apps: <code>improviser</code> and <code>harmonizer</code>. The harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
+<p>If you pass homunculus a MIDI file using the <code>--midi-prompt</code> flag, it will play as if continuing after the end of that file.</p>
+<p>Adding the <code>--punch-in</code> flag will automatically switch voices to input mode when MIDI is received and back to auto after some time passes.</p>
+<!-- There are also two simpler notochord apps: `improviser` and `harmonizer`. The harmonizer adds extra concurrent notes for each MIDI note you play in. In a terminal, make sure your notochord Python environment is active and run:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>notochord harmonizer
 </span></code></pre></div>
-try <code>notochord harmonizer --help</code>
-to see more options.</p>
-<p>Development is now focused on <code>homunculus</code>, which is intended to subsume all features of <code>improviser</code> and <code>harmonizer</code>.</p>
+try `notochord harmonizer --help`
+to see more options.
+
+Development is now focused on `homunculus`, which is intended to subsume all features of `improviser` and `harmonizer`. -->
+
 <h2 id="python-api">Python API</h2>
-<p>See the docs for <code>Notochord.feed</code> and <code>Notochord.query</code> for the low-level Notochord inference API which can be used from Python code. <code>notochord/app/simple_harmonizer.py</code> provides a minimal example of how to build an interactive app.</p>
+<p>See the docs for <a href="https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.feed"><code>Notochord.feed</code></a> and <a href="https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.query"><code>Notochord.query</code></a> for the low-level Notochord inference API which can be used from Python code. <code>notochord/app/simple_harmonizer.py</code> provides a minimal example of how to build an interactive app.</p>
 <h2 id="osc-server">OSC server</h2>
 <p>You can also expose the inference API over Open Sound Control:
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>notochord server
@@ -1223,7 +1270,7 @@ progress can be monitored via tensorboard.</p>
     <script id="__config" type="application/json">{"base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "toc.follow", "content.code.copy", "content.code.select"], "search": "assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="assets/javascripts/bundle.081f42fc.min.js"></script>
+      <script src="assets/javascripts/bundle.ad660dcc.min.js"></script>
       
     
   </body>
