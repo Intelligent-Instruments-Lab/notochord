@@ -11,7 +11,6 @@ import traceback
 import mido
 from tqdm import tqdm
 import appdirs
-import numpy as np
 import joblib
 
 import torch
@@ -22,7 +21,7 @@ import torch.distributions as D
 from .rnn import GenericRNN
 from .distributions import CensoredMixtureLogistic, categorical_sample
 
-from .util import arg_to_set, download_url
+from .util import arg_to_set, download_url, argsort
 
 class NoPossibleEvents(Exception):
     pass
@@ -1482,7 +1481,7 @@ class Notochord(nn.Module):
                     params.append(None)
             undet_idx = cons_idx + uncons_idx
             perm = det_idx + undet_idx # permutation from the canonical order
-            iperm = np.argsort(perm) # inverse permutation back to canonical order
+            iperm = argsort(perm) # inverse permutation back to canonical order
 
             mode_names = ['instrument', 'pitch', 'time', 'velocity']
             name_to_idx = {k:v for k,v in zip(mode_names, iperm)}
@@ -1670,7 +1669,8 @@ class Notochord(nn.Module):
                     if answer.lower() in ["n","no"]:
                         break
         # path = 
-        checkpoint = torch.load(path, map_location=torch.device('cpu'))
+        checkpoint = torch.load(
+            path, map_location=torch.device('cpu'), weights_only=False)
         model = cls(**checkpoint['kw']['model'])
         model.load_state_dict(checkpoint['model_state'], strict=False)
         model.checkpoint_path = path

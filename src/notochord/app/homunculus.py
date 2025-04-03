@@ -54,7 +54,6 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
-import numpy as np
 import toml_file
 import mido
 from tqdm import tqdm
@@ -896,7 +895,7 @@ def main(
             for i in allowed_insts:
                 # don't upweight player controlled instruments though
                 if i in mode_insts('auto'):
-                    inst_weights[i] = np.exp(max(0, mc - counts[i] - n_margin))
+                    inst_weights[i] = math.exp(max(0, mc - counts[i] - n_margin))
                 else:
                     inst_weights[i] = 1.
         # print(f'{inst_weights=}')
@@ -1161,7 +1160,7 @@ def main(
             end_held(memo='stop on end')
             pending.stopped = True
 
-    @profile(print=print, enable=profiler)
+    # @profile(print=print, enable=profiler)
     def maybe_punch_out():
         none_held = set(mode_chans('input'))
         for c,_,_ in history.notes:

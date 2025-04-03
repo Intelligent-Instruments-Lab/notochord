@@ -8,7 +8,6 @@ Authors:
 from notochord import Notochord
 from iipyper import OSC, run
 from iipyper.types import *
-import numpy as np
 from time import time
 
 def main(host="127.0.0.1", receive_port=9999, send_port=None, 

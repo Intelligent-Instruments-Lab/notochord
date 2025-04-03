@@ -84,7 +84,7 @@ class NotoPerformance:
             ('inst',np.int16), # notochord instrument
             ('pitch',np.int16), # MIDI pitch
             ('vel',np.int8), # MIDI velocity
-            ('channel',np.int8), # MIDI channel
+            ('channel',np.int8), # MIDI channel (1-16)
         """
         if 'wall_time_ns' not in event:
             event['wall_time_ns'] = time.time_ns()

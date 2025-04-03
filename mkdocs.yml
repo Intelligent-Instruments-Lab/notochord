@@ -48,13 +48,11 @@ extra:
       link: https://iil.is
       name: Intelligent Instruments Lab
     - icon: material/email-outline
-      link: mailto:iil@lhi.is
+      link: mailto:victorshepardson@hi.is
     - icon: fontawesome/brands/facebook
       link: https://facebook.com/intelligentinstrumentslab
     - icon: fontawesome/brands/instagram
       link: https://instagram.com/intelligentinstruments
-    - icon: fontawesome/brands/x-twitter
-      link: https://x.com/_iil_is
     - icon: fontawesome/brands/youtube
       link: https://youtube.com/@IntelligentInstruments
     - icon: fontawesome/brands/discord

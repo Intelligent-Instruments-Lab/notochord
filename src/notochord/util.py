@@ -5,6 +5,9 @@ import urllib.request
 import torch
 from tqdm import tqdm
 
+def argsort(arr):
+    return sorted(range(len(arr)), key=lambda i: arr[i])
+
 # from https://stackoverflow.com/a/53877507
 class DownloadProgressBar(tqdm):
     def update_to(self, b=1, bsize=1, tsize=None):

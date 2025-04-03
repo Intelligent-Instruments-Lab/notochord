@@ -1,15 +1,15 @@
 [tool.poetry]
 name = "notochord"
-version = "0.6.1b0"
+version = "0.6.2b0"
 description = "Notochord is a real-time neural network model for MIDI performances."
 authors = ["Victor Shepardson <victor.shepardson@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.13"
-torch = ">=1.13,<2.3"
-numpy = "^1.23"
+python = ">=3.10,<3.14"
+torch = ">=1.13,<2.7"
+numpy = ">=1.23,<3"
 pandas = "^2.0"
 tqdm = "^4.64"
 sf2utils = "^0.9"
