@@ -791,7 +791,8 @@ def main(
         # if unmuting, we're done
         if not pending.gate:
             # cancel pending predictions
-            end_held(memo='mute')
+            if not sustain:
+                end_held(memo='mute')
             pending.clear()
         
     @profile(print=print, enable=profiler)    
