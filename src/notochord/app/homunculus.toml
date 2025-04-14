@@ -1,56 +1,9 @@
-[[control]]
-name = 'steer_pitch'
-control_change = [1, 74]
-value = 0.5
-range = [0, 1]
-
-[[control]]
-name = 'steer_density'
-control_change = [2, 75]
-value = 0.5
-range = [0, 1]
-
-[[control]]
-name = 'steer_rate'
-control_change = [3, 76]
-value = 0.5
-range = [0, 1]
-
-[[control]]
-name = 'steer_velocity'
-control_change = [4, 77]
-value = 0
-range = [0, 1]
-
-[[control]]
-name = 'timing_temp'
-control_change = [5, 78]
-value = 0.2
-range = [0, 1]
-
-[[control]]
-name = 'rhythm_temp'
-control_change = [6, 79]
-value = 0.9
-range = [0, 1]
-
-[[action]]
-name = 'reset'
-control_change = [8, 81]
-
-[[action]]
-name = 'reset'
-control_change = [8, 81]
-
-[[action]]
-name = 'query'
-
-[[action]]
-name = 'mute'
+# presets specify initial settings of parameters for each voice
+# some can be changed later on in the UI, others can only be set here
 
 [[preset]]
-name = "demo"
-channel.1 = {mode="input", inst=1, mute=false}
+name = "demo" # whatever you want, just for display
+channel.1 = {mode="input", inst=1, mute=false} # specify the voice in channel 1
 channel.2 = {mode="auto", inst=113, mute=false}
 channel.3 = {mode="auto", inst=114, mute=false}
 channel.4 = {mode="auto", inst=12}
@@ -66,6 +19,14 @@ channel.13 = {mode="auto", inst=14}
 channel.14 = {mode="auto", inst=69}
 channel.15 = {mode="auto", inst=82}
 channel.16 = {mode="auto", inst=40}
+
+## presets can also include a MIDI file prompt giving the channel setup,
+## but also the initial model state
+## example prompt-based preset:
+# [[preset]]
+# name = "prompted"
+# prompt = "~/path/to/prompt.mid"
+# prompt_channel_order='sort' # this reorders channels in the MIDI file
 
 [[preset]]
 name = "ens1"
@@ -158,3 +119,64 @@ channel.13 = {mode="auto", inst=269}
 channel.14 = {mode="auto", inst=270}
 channel.15 = {mode="auto", inst=271}
 channel.16 = {mode="auto", inst=272}
+
+# controls: parameters which can be set to the value of the MIDI or OSC message
+# names correspond to features in the code; don't change those
+# you can change which control change messages update them, and default values
+[[control]]
+name = 'steer_pitch'
+control_change = [1, 74] # both CC 1 and CC 74 will set steer_pitch
+value = 0.5 # default value
+range = [0, 1] # clips values outside of this range
+
+[[control]]
+name = 'steer_density'
+control_change = [2, 75]
+value = 0.5
+range = [0, 1]
+
+[[control]]
+name = 'steer_rate'
+control_change = [3, 76]
+value = 0.5
+range = [0, 1]
+
+[[control]]
+name = 'steer_velocity'
+control_change = [4, 77]
+value = 0
+range = [0, 1]
+
+[[control]]
+name = 'timing_temp'
+control_change = [5, 78]
+value = 0.2
+range = [0, 1]
+
+[[control]]
+name = 'rhythm_temp'
+control_change = [6, 79]
+value = 0.9
+range = [0, 1]
+
+# actions: things that happen when MIDI or OSC is received
+# names correspond to features in the code; don't change those
+[[action]]
+name = 'reset'
+control_change = [8, 81]
+
+[[action]]
+name = 'reset'
+control_change = [8, 81]
+
+[[action]]
+name = 'query'
+
+[[action]]
+name = 'mute'
+
+## example action which loads the first preset and resets the model on cc 9
+# [[action]]
+# name = 'preset_reset'
+# control_change = [9]
+# value = 0
