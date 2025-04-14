@@ -83,6 +83,7 @@ def main(
 
     midi_prompt:Path=None,
     prompt_instruments:bool=True,
+    prompt_channel_order:str=None,
 
     initial_mute=False, # start with Notochord muted
     initial_query=False, # let Notochord start playing immediately
@@ -210,6 +211,10 @@ def main(
             path to a MIDI file to read in as a prompt
         prompt_instruments:
             if True, set unmuted instruments to those in the prompt file
+        prompt_channel_order:
+            method to re-order the channels in a MIDI prompt
+            default None (leave as they are)
+            'sort': sort by instrument ID and map to contiguous channels
 
         initial_mute: 
             start 'auto' voices muted so it won't play with input.
@@ -411,7 +416,7 @@ def main(
         raise
 
     ### this feeds all events from the prompt file to notochord
-    def do_prompt(prompt_file):
+    def do_prompt(prompt_file, channel_order=None):
         prompt_file = Path(prompt_file).expanduser()
         if prompt_file.is_dir():
             prompt_file = random.choice([
@@ -419,7 +424,11 @@ def main(
                 prompt_file.glob('**/*')
                 if p.is_file()
                 ])
+        noto.reset()
         initial_state, mid_channel_inst = noto.prompt(prompt_file)
+        if channel_order=='sort':
+            mid_channel_inst = {
+                c:i for c,i in enumerate(sorted(mid_channel_inst.values()))}
         config = {
             c+1:{'inst':i, 'mode':'auto', 'mute':False} 
             for c,i in mid_channel_inst.items()}
@@ -428,7 +437,8 @@ def main(
     global_initial_state = None
     config_ingest = None
     if midi_prompt is not None:
-        global_initial_state, config_ingest = do_prompt(midi_prompt)
+        global_initial_state, config_ingest = do_prompt(
+            midi_prompt, channel_order=prompt_channel_order)
         if not prompt_instruments:
             config_ingest = None
     initial_state = global_initial_state
@@ -443,7 +453,8 @@ def main(
     for p in presets:
         if 'prompt' in p:
             print(f'prompting "{p["prompt"]}" for preset "{p["name"]}"')
-            p['initial_state'], prompt_cfg = do_prompt(p['prompt'])
+            p['initial_state'], prompt_cfg = do_prompt(
+                p['prompt'], p.get('prompt_channel_order'))
             print(f'{prompt_cfg=}')
             preset_cfg = p['channel']
             for k,chan in prompt_cfg.items():
@@ -462,8 +473,6 @@ def main(
     elif (midi_prompt is None or not prompt_instruments) and len(presets):
         config_file = {**presets[0]['channel']}
         # preset = list(presets)[0]
-
-            
 
     config_cli = {} if config is None else config
 
@@ -1296,6 +1305,8 @@ def main(
         print('https://intelligent-instruments-lab.github.io/notochord/reference/notochord/app/homunculus/')
         print('or run `notochord homunculus --help`')
         print('to exit, use CTRL+C')
+
+        noto_reset()
 
         if initial_query:
             auto_query(predict_input=False, predict_follow=False)

@@ -1618,6 +1618,7 @@ class Notochord(nn.Module):
             named_states = zip(self.cell_state_names(), self.initial_state)
         else:
             named_states = state.items()
+        self.h_query = None
         with torch.inference_mode():
             for n,t in named_states:
                 getattr(self, n)[:] = t
