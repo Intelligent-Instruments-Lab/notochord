@@ -392,9 +392,12 @@ def main(
     # convert MIDI channels to int
     # print(presets)
     for p in presets:
-        p['channel'] = {
-            int(k):{**default_config_channel(int(k)), **v} 
-            for i,(k,v) in enumerate(p['channel'].items(),1)}
+        if 'channel' not in p:
+            p['channel'] = {}
+        else:
+            p['channel'] = {
+                int(k):{**default_config_channel(int(k)), **v} 
+                for k,v in p['channel'].items()}
           
     # load notochord model
     try:
@@ -408,29 +411,45 @@ def main(
         raise
 
     ### this feeds all events from the prompt file to notochord
-    if midi_prompt is None:
-        initial_state = None
-        config_ingest = None
-    else:
-        midi_prompt = Path(midi_prompt)
-        if midi_prompt.is_dir():
-            midi_prompt = random.choice([
+    def do_prompt(prompt_file):
+        prompt_file = Path(prompt_file).expanduser()
+        if prompt_file.is_dir():
+            prompt_file = random.choice([
                 p for p in 
-                midi_prompt.glob('**/*')
+                prompt_file.glob('**/*')
                 if p.is_file()
                 ])
-        initial_state, mid_channel_inst = noto.prompt(midi_prompt)
-        config_ingest = {
+        initial_state, mid_channel_inst = noto.prompt(prompt_file)
+        config = {
             c+1:{'inst':i, 'mode':'auto', 'mute':False} 
             for c,i in mid_channel_inst.items()}
+        return initial_state, config
+            
+    global_initial_state = None
+    config_ingest = None
+    if midi_prompt is not None:
+        global_initial_state, config_ingest = do_prompt(midi_prompt)
         if not prompt_instruments:
             config_ingest = None
+    initial_state = global_initial_state
 
     # TODO: config from CLI > config from preset file > channel defaults
     #       warn if preset is overridden by config
     # TODO: what is sensible default behavior?
     #    for quickstart, it's good if it does something as soon as possible
     #    but for general use, it's good if it does nothing until you ask... 
+
+    # process prompts in each preset
+    for p in presets:
+        if 'prompt' in p:
+            print(f'prompting "{p["prompt"]}" for preset "{p["name"]}"')
+            p['initial_state'], prompt_cfg = do_prompt(p['prompt'])
+            print(f'{prompt_cfg=}')
+            preset_cfg = p['channel']
+            for k,chan in prompt_cfg.items():
+                if k in preset_cfg:
+                    chan.update(preset_cfg[k])
+                preset_cfg[k] = chan
 
     config_file = {}
     if isinstance(preset, str):
@@ -443,6 +462,8 @@ def main(
     elif (midi_prompt is None or not prompt_instruments) and len(presets):
         config_file = {**presets[0]['channel']}
         # preset = list(presets)[0]
+
+            
 
     config_cli = {} if config is None else config
 
@@ -1019,13 +1040,18 @@ def main(
             action_cc[cc] = act
         action_osc[f'/notochord/homunculus/{name}'] = act
 
-    def dispatch_action(k):   
+    def dispatch_action(k, v=None):   
         if k=='reset':
             action_queue.append(noto_reset)
         elif k=='query':
             action_queue.append(auto_query)
         elif k=='mute':
             action_queue.append(noto_mute)
+        elif k=='preset':
+            action_queue.append(ft.partial(set_preset, v or 0))
+        elif k=='preset_reset':
+            action_queue.append(ft.partial(set_preset, v or 0))
+            action_queue.append(noto_reset)
         else:
             print(f'WARNING: action "{k}" not recognized')
 
@@ -1046,7 +1072,8 @@ def main(
 
         if msg.control in action_cc:
             k = action_cc[msg.control]['name']
-            dispatch_action(k)
+            v = action_cc[msg.control].get('value')
+            dispatch_action(k, v)
 
     if osc_port is not None:
         @osc.handle('/notochord/homunculus/*')
@@ -1063,8 +1090,9 @@ def main(
                 print(f"{name}={controls[name]}")
 
             if route in action_osc:
-                k = action_osc[route]['name']
-                dispatch_action(k)
+                action = action_osc[route]
+                k = action['name']
+                dispatch_action(k, v=a[0] if len(a) else action.get('value'))
 
     input_sw = Stopwatch()
     dropped = set()# (channel, pitch)
@@ -1355,17 +1383,28 @@ def main(
 
     # @lock
     def set_preset(p):
+        nonlocal initial_state
         print(f'load preset: {p}')
-        preset = presets[p]['channel']
+        preset = presets[p]
+
+        state = preset.get('initial_state')
+        if state is None:
+            print(f'using global initial state')
+            initial_state = global_initial_state
+        else:
+            print(f'using initial state from preset')
+            initial_state = state
+
+        preset_cfg = preset['channel']
         for c in range(1,17):    
             # if c not in config:
             #     config[c] = default_config_channel(c)
-            if c not in preset:
+            if c not in preset_cfg:
                 set_mute(c, True, update=False)
             else:
                 # NOTE: config should *not* be updated before calling set_* 
                 v = default_config_channel(c)
-                v.update(preset.get(c, {}))
+                v.update(preset_cfg.get(c, {}))
                 set_mode(c, v.pop('mode'), update=False)
                 set_inst(c, v.pop('inst'), update=False)
                 set_mute(c, v.pop('mute'), update=False)

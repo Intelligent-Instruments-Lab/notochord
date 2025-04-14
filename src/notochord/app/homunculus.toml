@@ -39,6 +39,10 @@ name = 'reset'
 control_change = [8, 81]
 
 [[action]]
+name = 'reset'
+control_change = [8, 81]
+
+[[action]]
 name = 'query'
 
 [[action]]
