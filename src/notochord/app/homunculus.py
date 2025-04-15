@@ -5,7 +5,7 @@ Notochord plays different instruments along with the player.
 
 # Authors:
 #   Victor Shepardson
-#   Intelligent Instruments Lab 2023
+#   Intelligent Instruments Lab 2025
 
 tui_doc = """Welcome to notochord homunculus.
 You have 16 channels of MIDI, laid out in two rows of eight.
@@ -86,7 +86,8 @@ def main(
     prompt_channel_order:str=None,
 
     initial_mute=False, # start with Notochord muted
-    initial_query=False, # let Notochord start playing immediately
+    initial_query=None, # DEPRECATED, now inverse of `initial_stop`
+    initial_stop=False, # if False, auto voices play immediately
 
     midi_in:Optional[str]=None, # MIDI port for player input
     midi_out:Optional[str]=None, # MIDI port for Notochord output
@@ -218,9 +219,9 @@ def main(
 
         initial_mute: 
             start 'auto' voices muted so it won't play with input.
-        initial_query: 
-            query Notochord immediately,
-            so 'auto' voices begin playing  without input.
+        initial_stop: 
+            if True, begin in a stopped state, 
+            so 'auto' voices don't begin playing without input.
 
         midi_in: 
             MIDI ports for input. 
@@ -300,6 +301,10 @@ def main(
         osc = OSC(osc_host, osc_port)
     midi = MIDI(midi_in, midi_out, suppress_feedback=suppress_midi_feedback)
 
+    # backwards compat
+    if initial_query is not None:
+        initial_stop = not initial_query
+
     estimated_latency = estimated_feed_latency + estimated_query_latency
 
     if input_channel_map is None: input_channel_map = {}
@@ -377,6 +382,17 @@ def main(
     # store control values
     controls = {ctrl['name']:ctrl.get('value', None) for ctrl in control_meta}
 
+    # load notochord model
+    try:
+        noto = Notochord.from_checkpoint(checkpoint)
+        noto.eval()
+        noto.feed(0,0,0,0) # smoke test
+        noto.query()
+        noto.reset()
+    except Exception:
+        print("""error loading notochord model""")
+        raise
+
     # defaults
     def default_config_channel(i):
         """default values for presets
@@ -384,7 +400,7 @@ def main(
         """
         return {
             'mode':'auto', 
-            'inst':257, 
+            'inst':noto.first_anon_like(1), 
             'mute':True, 
             'source':max(1,i-1), 
             'note_shift':0,
@@ -402,18 +418,7 @@ def main(
         else:
             p['channel'] = {
                 int(k):{**default_config_channel(int(k)), **v} 
-                for k,v in p['channel'].items()}
-          
-    # load notochord model
-    try:
-        noto = Notochord.from_checkpoint(checkpoint)
-        noto.eval()
-        noto.feed(0,0,0,0) # smoke test
-        noto.query()
-        noto.reset()
-    except Exception:
-        print("""error loading notochord model""")
-        raise
+                for k,v in p['channel'].items()}   
 
     ### this feeds all events from the prompt file to notochord
     def do_prompt(prompt_file, channel_order=None):
@@ -430,7 +435,8 @@ def main(
             mid_channel_inst = {
                 c:i for c,i in enumerate(sorted(mid_channel_inst.values()))}
         config = {
-            c+1:{'inst':i, 'mode':'auto', 'mute':False} 
+            # c+1:{'inst':i, 'mode':'auto', 'mute':False} 
+            c+1:{'inst':i, 'mute':False} 
             for c,i in mid_channel_inst.items()}
         return initial_state, config
             
@@ -442,12 +448,6 @@ def main(
         if not prompt_instruments:
             config_ingest = None
     initial_state = global_initial_state
-
-    # TODO: config from CLI > config from preset file > channel defaults
-    #       warn if preset is overridden by config
-    # TODO: what is sensible default behavior?
-    #    for quickstart, it's good if it does something as soon as possible
-    #    but for general use, it's good if it does nothing until you ask... 
 
     # process prompts in each preset
     for p in presets:
@@ -462,40 +462,12 @@ def main(
                     chan.update(preset_cfg[k])
                 preset_cfg[k] = chan
 
-    config_file = {}
-    if isinstance(preset, str):
-        for p in presets:
-            if preset == p['name']:
-                config_file = p['channel']
-                if config is not None:
-                    print('WARNING: `--config` overrides `--preset`')
-                break
-    elif (midi_prompt is None or not prompt_instruments) and len(presets):
-        config_file = {**presets[0]['channel']}
-        # preset = list(presets)[0]
-
-    config_cli = {} if config is None else config
-
-    config = {i:default_config_channel(i) for i in range(1,17)}
-    for k,v in config_file.items():
-        config[k].update(v)
-    for k,v in config_cli.items():
-        config[k].update(v)
-    if config_ingest is not None:
-        for k,v in config_ingest.items():
-            config[k].update(v)
-
-    # print(f'{config=}')
-
-    def validate_config():
-        assert all(
-            v['source'] in config for v in config.values() if v['mode']=='follow'
-            ), 'ERROR: no source given for follow voice'
-        # TODO: check for follow cycles
-    validate_config()
-
-    # for c,v in config.items():
-        # tui.set_inst(c, v['inst'])
+    # def validate_config():
+    #     assert all(
+    #         v['source'] in config for v in config.values() if v['mode']=='follow'
+    #         ), 'ERROR: no source given for follow voice'
+    #     # TODO: check for follow cycles
+    # validate_config()
 
     def mode_insts(t, allow_muted=True):
         if isinstance(t, str):
@@ -539,20 +511,19 @@ def main(
             k for k,v in config.items() 
             if v['mode']=='follow' 
             and v.get('source', None)==chan]
-      
+
+    def get_free_anon_like(i):
+        s = set(noto.anon_like(i)) - {d['inst'] for d in config.values()}
+        return next(iter(s))
+
     def dedup_inst(c, i):
-        # change to anon if already in use
-        def in_use():
-            return any(
-                c_other!=c 
-                and config[c_other]['inst']==i 
-                and config[c_other]['mode']!='follow'
-                for c_other in config)
-        if in_use():
-            # print(i, config)
-            i = noto.first_anon_like(i)
-        while in_use():
-            i = i+1
+        if any(
+            c_other!=c
+            and d['inst']==i 
+            and d['mode']!='follow'
+            for c_other, d in config.items()
+            ):
+            i = get_free_anon_like(i)
         return i
 
     def do_send_pc(c, i):
@@ -569,11 +540,6 @@ def main(
             # convert to 0-index
             program = (i-1) % 128
         midi.program_change(channel=c-1, program=program)
-
-    for c,i in channel_insts():
-        if send_pc:
-            do_send_pc(c, i)
-        config[c]['inst'] = dedup_inst(c, i)
 
     # simple class to hold pending event prediction
     class Prediction:
@@ -594,17 +560,13 @@ def main(
             self.last_event_time = self.next_event_time
             self.clear()
         def set(self, event):
-            if event['vel'] > 0:
+            if event.get('vel',0) > 0:
                 self.stopped = False
             if event.get('time') is None:
                 event['time'] = self.time_since()
             self.event = event
             self.next_event_time = event['time'] + (
                 self.last_event_time or now())
-            # if display:
-                # tui.defer(prediction=pending.event)
-            # print(pending.event)
-            # print(f'{now()=} {self.next_event_time=}')
         def time_since(self):
             if self.last_event_time is None:
                 return 0
@@ -827,6 +789,7 @@ def main(
             pending.clear()
 
     def noto_stop():
+        print('STOP')
         end_held(memo='stop on end')
         pending.stopped = True
         
@@ -1222,60 +1185,6 @@ def main(
             if c not in recent_events.channel.values:
                 set_mode(c, 'auto')
 
-    @repeat(lock=True, err_file=tui)
-    # @profile(print=print, enable=profiler)
-    def _():
-        """Loop, process enqueued actions and check if predicted next event happens"""
-        # print(f'repeat {time.time()}')
-        for _ in range(8): # process multiple actions per tick
-            if len(action_queue):
-                # print(action_queue)
-                action_queue.pop(0)()
-        # TODO: immediate query if an input has just happened
-
-        # if there is no predicted event,
-        # or it's not for an auto voice,
-        # sample one:
-        if pending.gate and not pending.stopped and not pending.is_auto():
-            # with profile('auto_query', print=print, enable=profiler):
-            auto_query()
-
-        # if unmuted, predicted event is auto, and its time has passed,
-        # realize it
-        if (
-            not testing and
-            pending.gate and
-            pending.is_auto() and
-            pending.time_until() <= 0
-            # pending.time_until() <= estimated_feed_latency
-            ):
-            # with profile('auto_event', print=print, enable=profiler):
-            auto_event()
-
-
-            # query for new prediction
-            if not (pending.stopped or debug_query):
-                # with profile('auto_query', print=print, enable=profiler):
-                auto_query(immediate=True)
-        else:
-            # otherwise there is a pause, update the UI with next prediction
-            tui.defer(prediction=pending.event)
-            if punch_in:
-                maybe_punch_out()
-
-        # TODO note sure if this is needed anymore
-        # adaptive time resolution here -- yield to other threads when 
-        # next event is not expected, but time precisely when next event
-        # is imminent
-        wait = 10e-3
-        if len(action_queue):
-            wait = 0
-        elif pending.is_auto():
-            wait = pending.time_until()
-        # print(f'{wait=}')
-        r = max(0, min(10e-3, wait))
-        return r
-
     @cleanup
     def _():
         """end any remaining notes"""
@@ -1296,26 +1205,6 @@ def main(
         for k,p in enumerate(presets):
             # tui.set_preset(k, p.get('name'))
             tui.call_from_anywhere(tui.set_preset, k, p.get('name'))
-
-    @tui.on
-    def mount():
-        update_config()
-        update_presets()
-        print('MIDI handling:')
-        print(midi.get_docs())
-        if osc_port is not None:
-            print('OSC handling:')
-            print(osc.get_docs())
-        print(tui_doc)
-        print('For more detailed documentation, see:')
-        print('https://intelligent-instruments-lab.github.io/notochord/reference/notochord/app/homunculus/')
-        print('or run `notochord homunculus --help`')
-        print('to exit, use CTRL+C')
-
-        noto_reset()
-
-        if initial_query:
-            auto_query(predict_input=False, predict_follow=False)
 
     ### set_* does whatever necessary to change channel properties
     ### calls update_config() to keep the UI in sync
@@ -1355,31 +1244,42 @@ def main(
         if update:
             update_config()
 
-
-    def set_inst(c, i, update=True):
-        print(f'SET INSTRUMENT {i}')
+    def set_inst(c, i, update=True, allow_pc=True):
+        # print(f'set channel {c} instrument {i}')
+        req_i = i
         if c in config:
             prev_i = config[c]['inst']
         else:
             prev_i = None
-        if prev_i==i:
-            # print('SAME INSTRUMENT')
-            return
+
+        # don't steal from lower channels
+        lower_insts = {d['inst'] for c2, d in config.items() if c2 < c}
+        if i in lower_insts:
+            # first anon not used by a lower channel
+            i = min(set(noto.anon_like(i)) - lower_insts)
 
         # end held notes on old instrument
-        if config[c]['mode']!='input':
+        if prev_i!=i and config[c]['mode']!='input':
             end_held(channel=c, memo='instrument change')
             pending.clear()
 
-        # send pc if appropriate
-        if send_pc:
-            do_send_pc(c, i)
-
-        i = dedup_inst(c, i)
-        
         # then set config
         config[c]['inst'] = i
-        # and call:
+
+        # steal from higher channels
+        for c2 in range(c+1,17):
+            i2 = config[c2]['inst']
+            if i2==i or i2 in lower_insts:
+                set_inst(
+                    c2, get_free_anon_like(i), 
+                    update=False, allow_pc=False)
+
+        # send pc if appropriate
+        if send_pc and allow_pc:
+            do_send_pc(c, req_i)
+
+        print(f'set channel {c} to instrument {i} (was {prev_i}, requested {req_i})')
+        
         if update:
             update_config()
 
@@ -1399,35 +1299,52 @@ def main(
             update_config()
 
     # @lock
-    def set_preset(p):
+    def set_preset(p, update=True):
         nonlocal initial_state
         print(f'load preset: {p}')
         preset = presets[p]
 
+        overlay = preset.get('overlay', False)
+
         state = preset.get('initial_state')
         if state is None:
-            print(f'using global initial state')
-            initial_state = global_initial_state
+            if overlay:
+                print(f'leaving current initial state')
+            else:
+                print(f'using global initial state')
+                initial_state = global_initial_state
         else:
-            print(f'using initial state from preset')
+            print(f'using initial state from preset prompt')
             initial_state = state
 
-        preset_cfg = preset['channel']
-        for c in range(1,17):    
-            # if c not in config:
-            #     config[c] = default_config_channel(c)
-            if c not in preset_cfg:
-                set_mute(c, True, update=False)
-            else:
-                # NOTE: config should *not* be updated before calling set_* 
+        set_config(preset['channel'], overlay=overlay, update=update)
+
+    def set_config(cfg, overlay=False, update=True):
+        # NOTE: config should *not* be updated before calling set_* 
+        if overlay:
+            # just apply settings which are in the preset
+            for c in sorted(cfg):
+                v = {**cfg.get(c, {})}
+                if 'mode' in v:
+                    set_mode(c, v.pop('mode'), update=False)
+                if 'inst' in v:
+                    set_inst(c, v.pop('inst'), update=False)
+                if 'mute' in v:
+                    set_mute(c, v.pop('mute'), update=False)
+                config[c].update(v)
+        else:
+            # deterministically apply preset on top of defaults
+            # for c in range(16,0,-1):    
+            for c in range(1,17):    
                 v = default_config_channel(c)
-                v.update(preset_cfg.get(c, {}))
+                v.update(cfg.get(c, {}))
                 set_mode(c, v.pop('mode'), update=False)
                 set_inst(c, v.pop('inst'), update=False)
                 set_mute(c, v.pop('mute'), update=False)
                 config[c].update(v)
-        update_config()
 
+        if update:
+            update_config()
 
     ### action_* runs on key/button press;
     ### invokes cycler / picker logic and schedules set_*
@@ -1502,7 +1419,8 @@ def main(
             self.app.pop_screen()
             self.app.pop_screen()
             # set_inst(self.channel, self.inst)
-            action_queue.append(ft.partial(set_inst, self.channel, self.inst))
+            action_queue.append(ft.partial(
+                set_inst, self.channel, self.inst))
 
     class InstrumentGroup(Button):
         """button which picks an instrument group"""
@@ -1544,10 +1462,105 @@ def main(
                 ), id="dialog",
             )
 
+    initial_preset = 0
+    if isinstance(preset, str):
+        for n,p in enumerate(presets):
+            if preset == p['name']:
+                initial_preset = n
+                break
+
+    config_cli = config or {}
+    config = {i:default_config_channel(i) for i in range(1,17)}
+    set_preset(initial_preset, update=False)
+    set_config(config_cli, overlay=True, update=False)
+    if config_ingest is not None:
+        set_config(config_ingest, overlay=True, update=False)
+
+    @repeat(lock=True, err_file=tui)
+    # @profile(print=print, enable=profiler)
+    def _():
+        """Loop, process enqueued actions and check if predicted next event happens"""
+        # print(f'repeat {time.time()}')
+        for _ in range(8): # process multiple actions per tick
+            if len(action_queue):
+                # print(action_queue)
+                action_queue.pop(0)()
+        # TODO: immediate query if an input has just happened
+
+        # if there is no predicted event,
+        # or it's not for an auto voice,
+        # sample one:
+        if pending.gate and not pending.stopped and not pending.is_auto():
+            # with profile('auto_query', print=print, enable=profiler):
+            auto_query()
+
+        # if unmuted, predicted event is auto, and its time has passed,
+        # realize it
+        if (
+            not testing and
+            pending.gate and
+            pending.is_auto() and
+            pending.time_until() <= 0
+            # pending.time_until() <= estimated_feed_latency
+            ):
+            # with profile('auto_event', print=print, enable=profiler):
+            auto_event()
+
+
+            # query for new prediction
+            if not (pending.stopped or debug_query):
+                # with profile('auto_query', print=print, enable=profiler):
+                auto_query(immediate=True)
+        else:
+            # otherwise there is a pause, update the UI with next prediction
+            tui.defer(prediction=pending.event)
+            if punch_in:
+                maybe_punch_out()
+
+        # TODO note sure if this is needed anymore
+        # adaptive time resolution here -- yield to other threads when 
+        # next event is not expected, but time precisely when next event
+        # is imminent
+        wait = 10e-3
+        if len(action_queue):
+            wait = 0
+        elif pending.is_auto():
+            wait = pending.time_until()
+        # print(f'{wait=}')
+        r = max(0, min(10e-3, wait))
+        return r
+
+    @tui.on
+    def mount(): 
+        update_config()
+        update_presets()
+        print('MIDI handling:')
+        print(midi.get_docs())
+        if osc_port is not None:
+            print('OSC handling:')
+            print(osc.get_docs())
+        print(tui_doc)
+        print('For more detailed documentation, see:')
+        print('https://intelligent-instruments-lab.github.io/notochord/reference/notochord/app/homunculus/')
+        print('or run `notochord homunculus --help`')
+        print('to exit, use CTRL+C')
+
+        action_queue.append(noto_reset)
+
+        if initial_stop:
+            action_queue.append(noto_stop)
+        else:
+            action_queue.append(ft.partial(
+                auto_query, predict_input=False, predict_follow=False))
+
     if use_tui:
         tui.run()
-    elif initial_query:
-        auto_query(predict_input=False, predict_follow=False)
+    else:
+        if initial_stop:
+            noto_stop()
+        else:
+            auto_query(predict_input=False, predict_follow=False)
+        
 
 ### def TUI components ###
 class NotoLog(Log):

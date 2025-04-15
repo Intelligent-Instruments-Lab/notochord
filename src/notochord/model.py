@@ -444,14 +444,14 @@ class Notochord(nn.Module):
         return r
 
 
+    # TODO: add a constructor argument to specify which are drums
+    # hardcoded for now
     # 0 - start token
     # 1-128 - melodic
     # 129-256 - drums
     # 257-288 - anon melodic
     # 289-320 - anon drums
     def is_drum(self, inst):
-        # TODO: add a constructor argument to specify which are drums
-        # hardcoded for now
         return inst > 128 and inst < 257 or inst > 288
     def is_anon(self, inst):
         return inst > 256
@@ -459,6 +459,10 @@ class Notochord(nn.Module):
         # TODO: add a constructor argument to specify how many anon
         # hardcoded for now
         return 289 if self.is_drum(inst) else 257
+    def anon_like(self, i):
+        n_anon = (self.instrument_domain - 257)//2
+        i = self.first_anon_like(i)
+        return range(i, i+n_anon)
     
     def feed(self, inst:int, pitch:int, time:Number, vel:Number, **kw):
         """consume an event and advance hidden state
