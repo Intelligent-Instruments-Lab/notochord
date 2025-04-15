@@ -594,7 +594,8 @@ def main(
             self.last_event_time = self.next_event_time
             self.clear()
         def set(self, event):
-            self.stopped = False
+            if event['vel'] > 0:
+                self.stopped = False
             if event.get('time') is None:
                 event['time'] = self.time_since()
             self.event = event
@@ -824,6 +825,10 @@ def main(
             if not sustain:
                 end_held(memo='mute')
             pending.clear()
+
+    def noto_stop():
+        end_held(memo='stop on end')
+        pending.stopped = True
         
     @profile(print=print, enable=profiler)    
     def end_held(feed=True, channel=None, memo=None):
@@ -1061,6 +1066,8 @@ def main(
         elif k=='preset_reset':
             action_queue.append(ft.partial(set_preset, v or 0))
             action_queue.append(noto_reset)
+        elif k=='stop':
+            action_queue.append(noto_stop)
         else:
             print(f'WARNING: action "{k}" not recognized')
 
@@ -1195,8 +1202,7 @@ def main(
         if do_reset:
             noto_reset()
         elif do_stop:
-            end_held(memo='stop on end')
-            pending.stopped = True
+            noto_stop()
 
     # @profile(print=print, enable=profiler)
     def maybe_punch_out():
