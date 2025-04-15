@@ -28,6 +28,9 @@ channel.16 = {mode="auto", inst=40}
 # prompt = "~/path/to/prompt.mid"
 # prompt_channel_order='sort' # this reorders channels in the MIDI file
 
+## `transpose` sets the range of follow voices,
+## relative to the note played by the followed voice
+## `source` is the channel of the followed voice
 [[preset]]
 name = "ens1"
 channel.1 = {mode="auto", inst=29, mute=false}
@@ -47,6 +50,7 @@ channel.14 = {mode="follow", inst=93, source=13, transpose=[12,24]}
 channel.15 = {mode="follow", inst=21, source=14, transpose=[0,4]}  
 channel.16 = {mode="follow", inst=16, source=15}
 
+## `range` constraints the pitches the voice can play by MIDI number
 [[preset]]
 name = "strings"
 channel.1 = {mode="input", inst=7, mute=false}
