@@ -416,9 +416,7 @@ def main(
         if 'channel' not in p:
             p['channel'] = {}
         else:
-            p['channel'] = {
-                int(k):{**default_config_channel(int(k)), **v} 
-                for k,v in p['channel'].items()}   
+            p['channel'] = {int(k):v for k,v in p['channel'].items()}   
 
     ### this feeds all events from the prompt file to notochord
     def do_prompt(prompt_file, channel_order=None):
@@ -461,6 +459,7 @@ def main(
                 if k in preset_cfg:
                     chan.update(preset_cfg[k])
                 preset_cfg[k] = chan
+            print(p['channel'])
 
     # def validate_config():
     #     assert all(
@@ -1407,6 +1406,10 @@ def main(
     def query():
         action_queue.append(auto_query)
 
+    @tui.set_action
+    def stop():
+        action_queue.append(noto_stop)
+
     ### TUI classes which close over variables defined in main
 
     class Instrument(Button):
@@ -1644,6 +1647,7 @@ class NotoControl(Static):
         yield Button("Mute", id="mute", variant="error")
         yield Button("Sustain", id="sustain", variant="primary")
         yield Button("Query", id="query")
+        yield Button("Stop", id="stop")
         yield Button("Reset", id="reset", variant="warning")
 
     def on_mount(self) -> None:
@@ -1659,7 +1663,9 @@ class NotoTUI(TUI):
         ("m", "mute", "Mute Notochord"),
         ("s", "sustain", "Sustain"),
         ("q", "query", "Re-query Notochord"),
-        ("r", "reset", "Reset Notochord")]
+        ("x", "stop", "Stop Notochord"),
+        ("r", "reset", "Reset Notochord"),
+        ]
     
     def compose(self):
         """Create child widgets for the app."""
