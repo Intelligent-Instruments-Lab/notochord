@@ -85,6 +85,8 @@ def main(
     prompt_instruments:bool=True,
     prompt_channel_order:str=None,
 
+    seed:int=0,
+
     initial_mute=False, # start with Notochord muted
     initial_query=None, # DEPRECATED, now inverse of `initial_stop`
     initial_stop=False, # if False, auto voices play immediately
@@ -216,6 +218,9 @@ def main(
             method to re-order the channels in a MIDI prompt
             default None (leave as they are)
             'sort': sort by instrument ID and map to contiguous channels
+
+        seed:
+            global random seed (added to preset random seed)
 
         initial_mute: 
             start 'auto' voices muted so it won't play with input.
@@ -419,10 +424,11 @@ def main(
             p['channel'] = {int(k):v for k,v in p['channel'].items()}   
 
     ### this feeds all events from the prompt file to notochord
-    def do_prompt(prompt_file, channel_order=None):
+    def do_prompt(prompt_file, channel_order=None, seed=None):
+        prompt_random = random.Random(seed)
         prompt_file = Path(prompt_file).expanduser()
         if prompt_file.is_dir():
-            prompt_file = random.choice([
+            prompt_file = prompt_random.choice([
                 p for p in 
                 prompt_file.glob('**/*')
                 if p.is_file()
@@ -451,8 +457,16 @@ def main(
     for p in presets:
         if 'prompt' in p:
             print(f'prompting "{p["prompt"]}" for preset "{p["name"]}"')
+            prompt_seed = p.get('seed')
+            if seed is None and p.get('seed') is None:
+                prompt_seed = None
+            else:
+                prompt_seed = (seed or 0) + p.get('seed', 0)
             p['initial_state'], prompt_cfg = do_prompt(
-                p['prompt'], p.get('prompt_channel_order'))
+                p['prompt'], 
+                channel_order=p.get('prompt_channel_order'),
+                seed=prompt_seed
+                )
             print(f'{prompt_cfg=}')
             preset_cfg = p['channel']
             for k,chan in prompt_cfg.items():
