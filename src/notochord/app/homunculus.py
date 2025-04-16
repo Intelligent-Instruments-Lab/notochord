@@ -93,6 +93,7 @@ def main(
 
     midi_in:Optional[str]=None, # MIDI port for player input
     midi_out:Optional[str]=None, # MIDI port for Notochord output
+    midi_control:Optional[str]=None, # MIDI port for note messages as controls
     thru=False, # copy player input to output
     send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
@@ -304,7 +305,13 @@ def main(
     """
     if osc_port is not None:
         osc = OSC(osc_host, osc_port)
+    if midi_in is None and midi_control is not None:
+        midi_in = set(mido.get_input_names()) - set(midi_control.split(','))
     midi = MIDI(midi_in, midi_out, suppress_feedback=suppress_midi_feedback)
+    if midi_control is not None:
+        midi_control = MIDI(
+            midi_control, midi_control, 
+            virtual_in_ports=0, virtual_out_ports=0)
 
     # backwards compat
     if initial_query is not None:
@@ -314,7 +321,9 @@ def main(
 
     if input_channel_map is None: input_channel_map = {}
 
-    if soundfont is not None:
+    if soundfont is None:
+        sf_inst_ranges = {}
+    else:
         # attempt to get instrument ranges from the soundfont
         # assumes first bank is used
         # not sure if entirely correct
@@ -329,7 +338,7 @@ def main(
             if hasattr(p,'bank') and p.bank==0}
         
         def _get_range(i):
-            if i>127:
+            if i>128:
                 return 0, 127
             lo, hi = 127,0
             for b in sf_presets[i-1].bags:
@@ -343,11 +352,8 @@ def main(
             assert lo<hi, (i-1,lo,hi)
             return lo, hi
         sf_inst_ranges = {i:_get_range(i) for i in range(1,129)}
-        def get_range(i):
-            return sf_inst_ranges.get(i, (0,127))
-    else:
-        def get_range(i):
-            return 0,127  
+    def get_range(i):
+        return sf_inst_ranges.get(i, (0,127))
 
     ### Textual UI
     tui = NotoTUI()
@@ -497,9 +503,9 @@ def main(
         return [k for k,v in config.items() if v['mode'] in t]
     def channel_inst(c):
         return config[c]['inst']
-    def channel_insts():
+    # def channel_insts():
         # list of channel,instrument pairs
-        return [(c,channel_inst(c)) for c in config]
+        # return [(c,channel_inst(c)) for c in config]
     def inst_ranges(insts):
         # instruments to sets of allowed MIDI numbers
         r = {}
@@ -952,6 +958,8 @@ def main(
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
+        print(f'{note_on_map=}')
+
         try:
             pending.set(query_method(
                 note_on_map, #note_off_map,
@@ -1007,6 +1015,7 @@ def main(
         """
         controls['steer_pitch'] = (msg.pitch+8192)/16384
         # print(controls)
+        print(f'{controls["steer_pitch"]=}')
 
     # very basic CC handling for controls
     control_cc = {}
@@ -1020,14 +1029,20 @@ def main(
             control_cc[cc] = ctrl
         control_osc[f'/notochord/homunculus/{name}'] = ctrl
     action_cc = {}
+    action_note = {}
     action_osc = {}
     for act in action_meta:
         name = act['name']
         ccs = act.get('control_change', [])
+        notes = act.get('note', [])
         if isinstance(ccs, Number) or isinstance(ccs, str):
             ccs = (ccs,)
+        if isinstance(notes, Number) or isinstance(notes, str):
+            notes = (notes,)
         for cc in ccs:
             action_cc[cc] = act
+        for note in notes:
+            action_note[note] = act
         action_osc[f'/notochord/homunculus/{name}'] = act
 
     def dispatch_action(k, v=None):   
@@ -1066,6 +1081,35 @@ def main(
             k = action_cc[msg.control]['name']
             v = action_cc[msg.control].get('value')
             dispatch_action(k, v)
+
+    if midi_control is not None:
+        preset_keys = range(112,120)
+        momentary_keys = [120]
+        for note in preset_keys:
+            midi_control.note_on(
+                channel=0, note=note, velocity=0)
+            
+        @midi_control.handle(type=('note_on'))
+        def _(msg, port):
+            print('control note event', msg)
+
+            if msg.velocity and msg.note in action_note:
+                k = action_note[msg.note]['name']
+                v = action_note[msg.note].get('value')
+                dispatch_action(k, v)
+            
+            # MIDI feedback (lights)
+            if msg.note in preset_keys:
+                # if msg.velocity==0: return
+                if msg.velocity>0:
+                    for note in preset_keys:
+                        midi_control.note_on(
+                            channel=0, note=note, velocity=0, port=port)
+                midi_control.note_on(
+                    channel=0, note=msg.note, velocity=70 if msg.velocity else 127, port=port)
+            if msg.note in momentary_keys:
+                midi_control.note_on(
+                    channel=0, note=msg.note, velocity=msg.velocity, port=port)
 
     if osc_port is not None:
         @osc.handle('/notochord/homunculus/*')
