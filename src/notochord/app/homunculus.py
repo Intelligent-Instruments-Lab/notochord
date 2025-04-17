@@ -1376,6 +1376,11 @@ def main(
             print(f'using initial state from preset prompt')
             initial_state = state
 
+        if update:
+            for i in range(NotoPresets.n_presets):
+                tui.query_one('#'+preset_id(i)).variant = (
+                    'warning' if i==p else 'default')
+
         set_config(preset['channel'], overlay=overlay, update=update)
 
     def set_config(cfg, overlay=False, update=True):
@@ -1469,6 +1474,37 @@ def main(
     @tui.set_action
     def stop():
         action_queue.append(noto_stop)
+
+    @tui.set_action
+    def preset1():
+        action_queue.append(ft.partial(set_preset, 0))
+    @tui.set_action
+    def preset2():
+        action_queue.append(ft.partial(set_preset, 1))
+    @tui.set_action
+    def preset3():
+        action_queue.append(ft.partial(set_preset, 2))
+    @tui.set_action
+    def preset4():
+        action_queue.append(ft.partial(set_preset, 3))
+    @tui.set_action
+    def preset5():
+        action_queue.append(ft.partial(set_preset, 4))
+    @tui.set_action
+    def preset6():
+        action_queue.append(ft.partial(set_preset, 5))
+    @tui.set_action
+    def preset7():
+        action_queue.append(ft.partial(set_preset, 6))
+    @tui.set_action
+    def preset8():
+        action_queue.append(ft.partial(set_preset, 7))
+    @tui.set_action
+    def preset9():
+        action_queue.append(ft.partial(set_preset, 8))
+    @tui.set_action
+    def preset10():
+        action_queue.append(ft.partial(set_preset, 9))
 
     ### TUI classes which close over variables defined in main
 
@@ -1725,6 +1761,16 @@ class NotoTUI(TUI):
         ("q", "query", "Re-query Notochord"),
         ("x", "stop", "Stop Notochord"),
         ("r", "reset", "Reset Notochord"),
+        ("1", "preset1", ""),
+        ("2", "preset2", ""),
+        ("3", "preset3", ""),
+        ("4", "preset4", ""),
+        ("5", "preset5", ""),
+        ("6", "preset6", ""),
+        ("7", "preset7", ""),
+        ("8", "preset8", ""),
+        ("9", "preset9", ""),
+        ("0", "preset10", ""),
         ]
     
     def compose(self):
