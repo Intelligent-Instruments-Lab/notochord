@@ -958,8 +958,7 @@ def main(
 
         max_t = None if max_time is None else max(max_time, min_time+0.2)
 
-        print(f'{note_on_map=}')
-
+        # print(f'{note_on_map=}')
         try:
             pending.set(query_method(
                 note_on_map, #note_off_map,
@@ -1013,9 +1012,12 @@ def main(
         """
         pitchwheel affects steer_pitch
         """
+        if thru:
+            midi.send(msg)
+        # print(msg)
         controls['steer_pitch'] = (msg.pitch+8192)/16384
         # print(controls)
-        print(f'{controls["steer_pitch"]=}')
+        # print(f'{controls["steer_pitch"]=}')
 
     # very basic CC handling for controls
     control_cc = {}
