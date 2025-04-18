@@ -26,7 +26,9 @@ channel.16 = {mode="auto", inst=40}
 # [[preset]]
 # name = "prompted"
 # prompt = "~/path/to/prompt.mid"
-# prompt_channel_order='sort' # this reorders channels in the MIDI file
+# prompt_channel_order='instrument' # this reorders channels by instrument (asc.)
+# prompt_channel_order='notes' # this reorders channels by most notes (desc.)
+# prompt_channel_order='channel' # (default) leaves channel order from MIDI file 
 
 ## `transpose` sets the range of follow voices,
 ## relative to the note played by the followed voice

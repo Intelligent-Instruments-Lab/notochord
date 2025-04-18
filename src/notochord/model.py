@@ -443,7 +443,6 @@ class Notochord(nn.Module):
                 )
         return r
 
-
     # TODO: add a constructor argument to specify which are drums
     # hardcoded for now
     # 0 - start token
@@ -1683,7 +1682,7 @@ class Notochord(nn.Module):
         model.eval()
         return model
     
-    def prompt(self, midi_file):
+    def prompt(self, midi_file, merge=False):
         """Read a MIDI file and feed events to this Notochord model.
 
         When possible, the hidden states will be cached so re-using the same prompt will be fast.
@@ -1694,7 +1693,9 @@ class Notochord(nn.Module):
             state: hidden state dict of the Notochord encoding the MIDI prompt
             channel_inst: dict mapping MIDI channel (0-index) to Notochord instrument (1-256)
         """
-        return prompt(self, Path(midi_file), state_hash=hash_states(self.get_state()))
+        return prompt(
+            self, Path(midi_file), 
+            merge=merge, state_hash=hash_states(self.get_state()))
     
 def hash_states(s):
     if isinstance(s, dict):
@@ -1706,36 +1707,93 @@ def hash_states(s):
 def hash_tensor(t):
     return hashlib.md5(json.dumps(t.tolist()).encode('utf-8')).digest()
 
+# TODO:
+# edge case: anon insts may run out if channels change program enough
+class InstrumentData:
+    """
+    channels: set of MIDI channels this instrument appeared on (0-indexed)
+    pitches: set of MIDI pitches this instrument played
+    velocities: set of MIDI velocities this instrument played
+    orig_inst: the Notochord instrument corresponding to the MIDI program this
+        instrument was derived from -- i.e. if this is an anonymous instrument
+        because it collided with the same instrument on another channel,
+        this annotates that original instrument
+    notes: count of noteOn events after processing
+    shortened: number of notes shorted to avoid pitch collisions
+    dropped: number of notes dropped to avoid pitch collisions
+    """
+    def __init__(self):
+        self.channels = set()
+        self.pitches = set()
+        self.velocities = set()
+        self.orig_inst = None
+        self.notes = 0
+        self.shortened = 0
+        self.dropped = 0
+    def __repr__(self):
+        pr = f' ({min(self.pitches)}-{max(self.pitches)})' if self.notes else ''
+        return f'(notes={self.notes} shortened={self.shortened} dropped={self.dropped} orig_inst={self.orig_inst} channels={self.channels} pitches={len(self.pitches)}{pr})'
 @mem.cache(ignore=('noto',))
-def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None): 
+def prompt(
+    noto:Notochord, midi_file:str|Path, 
+    merge:bool=False, insert_threshold:Number=0.05, 
+    state_hash:int|None=None): 
     # state_hash is used for disk cache only
     """Read a MIDI file and feed events to a Notochord model.
 
     Args:
         noto: a Notochord
         midi_file: path of a midi file to read
+        merge: whether to merge parts on the same instrument or use anonymous
+            instrument IDs
+        insert_threshold: minimum note duration, in seconds, to insert a
+            noteOff rather than drop a noteOn when handling overlap
         state_hash: representation of model hidden state to use for caching results
     Returns:
         state: hidden state dict of the Notochord encoding the MIDI prompt
-        channel_inst: dict mapping MIDI channel (0-index) to Notochord instrument (1-256)
+        inst_data: dict mapping Notochord instrument to metadata (see `InstrumentData` class)
     """
     # TODO: deduplicate this code?
     class AnonTracks:
         def __init__(self):
             self.n = 0
-        def __call__(self):
-            self.n += 1
-            return 256+self.n
+            self.n_drum = 0
+        def __call__(self, drum=False):
+            if drum:
+                self.n_drum += 1
+                return noto.first_anon_like(129)+self.n_drum
+            else:
+                self.n += 1
+                return noto.first_anon_like(1)+self.n
     next_anon = AnonTracks()
-    mid_channel_inst = defaultdict(next_anon)
+    # track current instrument on each channel
+    noto_channel_inst = defaultdict(next_anon)
+    # tracks the original instrument when anon is used to disambiguate parts
+    # note the 'original' instrument is still anon when there is no PC on channel
+    orig_channel_inst = defaultdict(lambda c: noto_channel_inst[c])
+    # metadata for each instrument
+    inst_data = defaultdict(InstrumentData)
 
     mid = mido.MidiFile(midi_file)
     ticks_per_beat = mid.ticks_per_beat
     us_per_beat = 500_000
     time_seconds = 0
     prev_time_seconds = 0
-    event_count = defaultdict(int)
+    # event_count = defaultdict(int)
     print(f'MIDI file: {ticks_per_beat} ticks, {us_per_beat} μs per beat')
+
+    dropped_notes = set()
+
+    def set_inst(chan, inst):
+        orig_inst = inst
+        # get anonymous instrument if already in use and not merging
+        inst_reused = any(
+            inst==i and chan!=c for c,i in noto_channel_inst.items())
+        if inst_reused and not merge:
+            inst = next_anon(drum=noto.is_drum(inst))
+
+        noto_channel_inst[chan] = inst
+        orig_channel_inst[chan] = orig_inst
 
     for msg in tqdm(mid, desc='ingesting MIDI prompt'):
         chan = msg.channel if hasattr(msg, 'channel') else None
@@ -1744,8 +1802,8 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
         time_seconds += msg.time
 
         if msg.type=='program_change':
-            inst = msg.program + 1 + 128*int(msg.channel==9)
-            mid_channel_inst[chan] = inst
+            set_inst(chan, msg.program + 1 + 128*int(msg.channel==9))
+
             # tqdm.write(str(msg))
             tqdm.write(f'MIDI file: set program {msg.program} (channel {chan}) at {time_seconds} seconds')
             
@@ -1754,35 +1812,61 @@ def prompt(noto:Notochord, midi_file:str|Path, state_hash:int|None=None):
             tqdm.write(f'MIDI file: set tempo {us_per_beat} μs/beat at {time_seconds} seconds')
             
         elif msg.type in ('note_on', 'note_off'):
-            # make channel 10 with no PC standard drumkit
-            if chan not in mid_channel_inst and chan==9:
-                mid_channel_inst[chan] = 129
+            # make channel 10 with no PC anonymous drumkit
+            if chan not in noto_channel_inst and chan==9:
+                set_inst(chan, noto.first_anon_like(129))
 
-            event_count[(chan, mid_channel_inst[chan])] += 1
+            orig_inst = orig_channel_inst[chan]
+            inst = noto_channel_inst[chan]
+            pitch = msg.note
+            dt = time_seconds - prev_time_seconds
+            vel = msg.velocity if msg.type=='note_on' else 0
+            # event_count[(chan, mid_channel_inst[chan])] += 1
+
+            d = inst_data[inst]
+            d.orig_inst = orig_inst
+            if vel > 0:
+                # handle collision:
+                # if the ongoing note is past a given length,
+                # insert a noteOff
+                # otherwise drop the second one
+                if (inst, pitch) in noto.held_notes:
+                    # if inst==50: tqdm.write(f'collision: {(inst, pitch)=} {time_seconds=}')
+                    dur = noto.held_notes[(inst,pitch)] + dt
+                    dropped_notes.add((chan, pitch))
+                    if dur > insert_threshold:
+                        # if inst==50: tqdm.write(f'insert {dur=}')
+                        noto.feed(inst, pitch, dt, 0)
+                        d.shortened += 1
+                        dt = 0
+                    else:
+                        # if inst==50: tqdm.write(f'drop {dur=}')
+                        d.dropped += 1
+                        continue
+                d.notes += 1
+                d.pitches.add(pitch)
+                d.velocities.add(vel)
+            else:
+                # use first noteOff (likely from a different channel)
+                # if (inst, pitch) not in noto.held_notes:
+                    # continue
+                # use corresponding noteOff
+                if (chan, pitch) in dropped_notes:
+                    # if inst==50: tqdm.write(f'dropped: {(chan, pitch)=} {time_seconds=}')
+                    dropped_notes.remove((chan, pitch))
+                    continue
+
+            # if inst==50: tqdm.write(f'event: {(chan, inst, pitch, vel)=} {time_seconds=}')
+
+            d.channels.add(chan)
+
             # event_count[mid_channel_inst[msg.channel]] += 1
-            noto.feed(
-                mid_channel_inst[chan],
-                msg.note,
-                time_seconds - prev_time_seconds,
-                msg.velocity if msg.type=='note_on' else 0)
+            noto.feed(inst, pitch, dt, vel)
             prev_time_seconds = time_seconds
 
         else: continue
 
-    print(f'MIDI file: {event_count=}')
-    print(f'MIDI file: {sum(event_count.values())} events in {time_seconds} seconds')
-
-    # for each channel, report instrument with most note events,
-    # ignoring any with zero events
-    print(f'{mid_channel_inst=}')
-    mid_channel_insts = {
-        c:[(n,i) for (c_,i),n in event_count.items() if c_==c and n>0]
-        for c in mid_channel_inst
-    }
-    mid_channel_inst = {
-        c:max(l)[1] for c,l in mid_channel_insts.items() if len(l)
-    }
-    
-    # print(event_count)
-    # print(mid_channel_inst)  
-    return noto.get_state(), mid_channel_inst
+    inst_data = {k:v for k,v in inst_data.items() if v.notes>0}
+    print('MIDI file:', inst_data)
+ 
+    return noto.get_state(), inst_data

@@ -84,6 +84,7 @@ def main(
     midi_prompt:Path=None,
     prompt_instruments:bool=True,
     prompt_channel_order:str=None,
+    prompt_merge:bool=False,
 
     seed:int=0,
 
@@ -430,7 +431,7 @@ def main(
             p['channel'] = {int(k):v for k,v in p['channel'].items()}   
 
     ### this feeds all events from the prompt file to notochord
-    def do_prompt(prompt_file, channel_order=None, seed=None):
+    def do_prompt(prompt_file, channel_order=None, merge_channels=False, seed=None):
         prompt_random = random.Random(seed)
         prompt_file = Path(prompt_file).expanduser()
         if prompt_file.is_dir():
@@ -440,21 +441,42 @@ def main(
                 if p.is_file()
                 ])
         noto.reset()
-        initial_state, mid_channel_inst = noto.prompt(prompt_file)
-        if channel_order=='sort':
-            mid_channel_inst = {
-                c:i for c,i in enumerate(sorted(mid_channel_inst.values()))}
-        config = {
-            # c+1:{'inst':i, 'mode':'auto', 'mute':False} 
-            c+1:{'inst':i, 'mute':False} 
-            for c,i in mid_channel_inst.items()}
+        initial_state, inst_data = noto.prompt(prompt_file, merge=merge_channels)
+        # first get the 16 most active parts
+        insts = sorted(inst_data, key=lambda x: -inst_data[x].notes)[:16]
+        # then order them onto channels
+        def make_cfg(i):
+            return {
+                'inst':i, 'mute':False, 
+                'program_inst':inst_data[i].orig_inst}
+        if channel_order=='instrument':
+            # sort by (original_inst, noto_inst)
+            config = {
+                c+1:make_cfg(i)
+                for c,i in enumerate(sorted(
+                    insts, key=lambda k: (inst_data[k].orig_inst, k)))}
+        elif channel_order=='notes':
+            config = {c+1:make_cfg(i) for c,i in enumerate(insts)}
+        elif channel_order=='channel' or channel_order is None:
+            # NOTE this takes the minimum channel if an instrument
+            # appears on multiple channels
+            # the instrument with most notes will take precedence
+            # if multiple instruments appear
+            # but could be better to avoid collisions in some cases...
+            config = {
+                min(inst_data[i].channels)+1:make_cfg(i) 
+                for i in reversed(insts)}
+        else:
+            raise ValueError(f"""
+                unknown {channel_order=} 
+                (options are 'instrument', 'notes', or 'channel')""")
         return initial_state, config
             
     global_initial_state = None
     config_ingest = None
     if midi_prompt is not None:
         global_initial_state, config_ingest = do_prompt(
-            midi_prompt, channel_order=prompt_channel_order)
+            midi_prompt, merge=prompt_merge, channel_order=prompt_channel_order)
         if not prompt_instruments:
             config_ingest = None
     initial_state = global_initial_state
@@ -470,6 +492,7 @@ def main(
                 prompt_seed = (seed or 0) + p.get('seed', 0)
             p['initial_state'], prompt_cfg = do_prompt(
                 p['prompt'], 
+                merge_channels=p.get('prompt_merge_channels'),
                 channel_order=p.get('prompt_channel_order'),
                 seed=prompt_seed
                 )
@@ -1303,7 +1326,7 @@ def main(
         if update:
             update_config()
 
-    def set_inst(c, i, update=True, allow_pc=True):
+    def set_inst(c, i, program=None, update=True, allow_pc=True):
         # print(f'set channel {c} instrument {i}')
         req_i = i
         if c in config:
@@ -1335,7 +1358,7 @@ def main(
 
         # send pc if appropriate
         if send_pc and allow_pc:
-            do_send_pc(c, req_i)
+            do_send_pc(c, req_i if program is None else program)
 
         print(f'set channel {c} to instrument {i} (was {prev_i}, requested {req_i})')
         
@@ -1360,7 +1383,7 @@ def main(
     # @lock
     def set_preset(p, update=True):
         nonlocal initial_state
-        print(f'load preset: {p}')
+        print(f'load preset: {p+1}')
         preset = presets[p]
 
         overlay = preset.get('overlay', False)
@@ -1392,7 +1415,10 @@ def main(
                 if 'mode' in v:
                     set_mode(c, v.pop('mode'), update=False)
                 if 'inst' in v:
-                    set_inst(c, v.pop('inst'), update=False)
+                    set_inst(
+                        c, v.pop('inst'), 
+                        program=v.pop('program_inst', None), 
+                        update=False)
                 if 'mute' in v:
                     set_mute(c, v.pop('mute'), update=False)
                 config[c].update(v)
@@ -1403,7 +1429,10 @@ def main(
                 v = default_config_channel(c)
                 v.update(cfg.get(c, {}))
                 set_mode(c, v.pop('mode'), update=False)
-                set_inst(c, v.pop('inst'), update=False)
+                set_inst(
+                    c, v.pop('inst'), 
+                    program=v.pop('program_inst', None), 
+                    update=False)
                 set_mute(c, v.pop('mute'), update=False)
                 config[c].update(v)
 
@@ -1734,7 +1763,7 @@ class NotoPresets(Static):
 
     def on_mount(self) -> None:
         for i in range(NotoPresets.n_presets):
-            self.query_one("#"+preset_id(i)).tooltip = f"load preset {i}"
+            self.query_one("#"+preset_id(i)).tooltip = f"load preset {i+1}"
 
 class NotoControl(Static):
     def compose(self):
