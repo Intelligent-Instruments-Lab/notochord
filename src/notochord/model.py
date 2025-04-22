@@ -767,7 +767,7 @@ class Notochord(nn.Module):
                 quantile. e.g. truncate_quantile_pitch=(0.5, 1) always samples
                 above the median predicted pitch. Ignored for drums.
             truncate_quantile_vel: truncate the velocity distribution by 
-                quantile. e.g. truncate_quantile_velocity=(0, 0.5) always
+                quantile. e.g. truncate_quantile_vel=(0, 0.5) always
                 samples below the median predicted velocity. Affects only NoteOn.
             steer_density: adjust relative weight of NoteOn and NoteOff.
                 values above 0.5 favor NoteOn, values below 0.5 favor NoteOff.
@@ -880,7 +880,8 @@ class Notochord(nn.Module):
             'vel', 
             cases=(
                 Range(-torch.inf,0.5,w_off), 
-                Range(0.5,torch.inf,w_on,min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
+                Range(0.5,torch.inf,w_on,
+                    min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
             then=lambda e: Query(
                 'time',       
                 truncate=(
@@ -975,7 +976,7 @@ class Notochord(nn.Module):
                 quantile. e.g. truncate_quantile_pitch=(0.5, 1) always samples
                 above the median predicted pitch. Ignored for drums.
             truncate_quantile_vel: truncate the velocity distribution by 
-                quantile. e.g. truncate_quantile_velocity=(0, 0.5) always
+                quantile. e.g. truncate_quantile_vel=(0, 0.5) always
                 samples below the median predicted velocity. Affects only NoteOn.
             steer_density: adjust relative weight of NoteOn and NoteOff.
                 values above 0.5 favor NoteOn, values below 0.5 favor NoteOff.
@@ -1084,12 +1085,15 @@ class Notochord(nn.Module):
 
         min_vel = max(0.5, 0 if min_vel is None else min_vel)
         max_vel = torch.inf if max_vel is None else max_vel
+
+        # print(f'{truncate_quantile_vel=}')
         
         return self.deep_query(Query(
             'vel', 
             cases=(
                 Range(-torch.inf,0.5,w_off), 
-                Range(0.5,torch.inf,w_on,min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
+                Range(0.5,torch.inf,w_on,
+                    min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
             then=lambda e: Query(
                 'inst', 
                 whitelist={

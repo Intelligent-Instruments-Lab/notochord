@@ -334,6 +334,11 @@ def main(
 
     if input_channel_map is None: input_channel_map = {}
 
+    ### Textual UI
+    tui = NotoTUI()
+    print = notochord.print = iipyper.print = tui.print
+    ###
+
     if soundfont is None:
         sf_inst_ranges = {}
     else:
@@ -365,7 +370,6 @@ def main(
                     p = sf_presets[i-1]
                 else:
                     p = sf_presets[0]
-            print('\n',p)
             # union of bags in preset
             # bag: intersection of range with union of bags in instrument
             preset_range = set()
@@ -373,7 +377,6 @@ def main(
                 bag_range = set()
                 if Sf2Gen.OPER_INSTRUMENT in b.gens: 
                     inst = soundfont.instruments[b[Sf2Gen.OPER_INSTRUMENT].amount]
-                    print('\t', inst)
                     for bi in inst.bags:
                         if Sf2Gen.OPER_SAMPLE_ID in bi.gens:
                             if bi.key_range is not None:
@@ -391,11 +394,6 @@ def main(
         sf_inst_ranges = {i:_get_range(i) for i in range(1,257)}
     def get_range(i):
         return sf_inst_ranges.get(i, (0,127))
-
-    ### Textual UI
-    tui = NotoTUI()
-    print = notochord.print = iipyper.print = tui.print
-    ###
 
     # print(f'{sf_inst_ranges=}')
 
@@ -450,7 +448,7 @@ def main(
         """default values for presets
         all fields should appear here, even if default is None
         """
-        d = global_config['default']
+        d = global_config.get('default', {})
         # toml_file's get method also sets the value for some reason??
         # and it refuses to set a None value...
         def get(k, default):
@@ -805,6 +803,7 @@ def main(
                     # edge case: no possible pitch
                     print(f'skipping follow {noto_channel=}, no pitches available')
                     print(f'{pitch_range} minus {source_pitch} minus {already_playing}')
+                    print(f'{lo=} {min_x=} {hi=} {max_x=} {source_pitch=}')
                     continue
                 elif len(pitches)==1:
                     # edge case: there is exactly one possible pitch
@@ -940,13 +939,12 @@ def main(
 
         # print(f'{pending.lateness=} {pending.time_since()=}')
 
-        if pending.lateness > lateness_margin:
-            # backoff = pending.time_since()# + pending.lateness/2
-            # backoff = pending.time_since()/2
-            backoff = pending.lateness/2
+        lateness = pending.lateness if immediate else -pending.time_until()
+        if lateness > lateness_margin:
+            backoff = lateness + estimated_latency
             if backoff > min_time:
                 min_time = backoff
-                print(f'set {min_time=} due to {pending.lateness=}')
+                print(f'set {min_time=} due to {lateness=}')
 
         # if max_time < min_time, exclude input instruments
         input_late = max_time is not None and max_time < min_time
@@ -960,15 +958,14 @@ def main(
 
         # held_notes = history.held_inst_pitch_map()
         # print(f'{held_notes=}')
-
         steer_time = 1-controls.get('steer_rate', 0.5)
         steer_pitch = controls.get('steer_pitch', 0.5)
         steer_density = controls.get('steer_density', 0.5)
         steer_velocity = controls.get('steer_velocity', 0.5)
 
-        if pending.lateness > soft_lateness_margin and pending.lateness <= lateness_margin:
+        if lateness > soft_lateness_margin and lateness <= lateness_margin:
             steer_time = 1
-            print(f'set {steer_time=} due to lateness')
+            print(f'set {steer_time=} due to {lateness=}')
 
         rhythm_temp = controls.get('rhythm_temp', 1)
         timing_temp = controls.get('timing_temp', 1)
@@ -1448,6 +1445,7 @@ def main(
     # @lock
     def set_preset(p, update=True):
         nonlocal initial_state
+        if p >= len(presets): return
         print(f'load preset: {p+1}')
         preset = presets[p]
 
@@ -1674,6 +1672,7 @@ def main(
         set_config(config_ingest, overlay=False, update=False)
     set_config(config_cli, overlay=True, update=False)
 
+    prediction_displayed = [None]
     @repeat(lock=True, err_file=tui)
     # @profile(print=print, enable=profiler)
     def _():
@@ -1711,7 +1710,9 @@ def main(
                 auto_query(immediate=True)
         else:
             # otherwise there is a pause, update the UI with next prediction
-            tui.defer(prediction=pending.event)
+            if pending.event != prediction_displayed[0]:
+                tui.defer(prediction=pending.event)
+                prediction_displayed[0] = pending.event
             if punch_in:
                 maybe_punch_out()
 
