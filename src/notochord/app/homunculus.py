@@ -83,7 +83,7 @@ def main(
     preset_file:Path=None,
 
     midi_prompt:Path=None,
-    prompt_instruments:bool=True,
+    prompt_config:bool=True, # set channel config based on prompt
     prompt_channel_order:str=None,
     prompt_merge:bool=False,
 
@@ -218,14 +218,20 @@ def main(
             path to a MIDI file to read in as a prompt.
             note that prompts can alternatively be associated with presets 
             in `homunculus.toml`
-        prompt_instruments:
-            if True, set unmuted instruments to those in the prompt file
+        prompt_config:
+            if True, set unmuted instruments to those in the prompt file.
+            prompt config overrides presets,
+            but config from the `--condfig flag` will override the prompt
         prompt_channel_order:
             method to re-order the channels in a MIDI prompt
             'channel' (default, leave as they are in file)
             'instrument': sort by instrument ID 
                 (keeping associated anonymous IDs together)
             'notes': sort by most notes
+        prompt_merge:
+            if True, merge multiple channels with the same GM program into one
+            Notochord voice (with overlapping notes dropped or shortened)
+            if False, use anonymous instruments.
 
         seed:
             global random seed (added to preset random seed)
@@ -422,7 +428,7 @@ def main(
         control_meta = []
         action_meta = []
 
-    print(f'{global_config=}')
+    # print(f'{global_config=}')
     # print(f'{presets=}')
 
     # store control values
@@ -517,8 +523,9 @@ def main(
     config_ingest = None
     if midi_prompt is not None:
         global_initial_state, config_ingest = do_prompt(
-            midi_prompt, merge=prompt_merge, channel_order=prompt_channel_order)
-        if not prompt_instruments:
+            midi_prompt, 
+            merge_channels=prompt_merge, channel_order=prompt_channel_order)
+        if not prompt_config:
             config_ingest = None
     initial_state = global_initial_state
 
@@ -1663,9 +1670,9 @@ def main(
     config_cli = config or {}
     config = {i:default_config_channel(i) for i in range(1,17)}
     set_preset(initial_preset, update=False)
-    set_config(config_cli, overlay=True, update=False)
     if config_ingest is not None:
-        set_config(config_ingest, overlay=True, update=False)
+        set_config(config_ingest, overlay=False, update=False)
+    set_config(config_cli, overlay=True, update=False)
 
     @repeat(lock=True, err_file=tui)
     # @profile(print=print, enable=profiler)
