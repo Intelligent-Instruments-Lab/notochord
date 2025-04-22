@@ -63,6 +63,7 @@ torch.set_num_threads(1)
 
 import iipyper, notochord
 from notochord import Notochord, NotoPerformance, NoPossibleEvents
+from notochord.util import deep_update
 from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lock
 
 from rich.panel import Panel
@@ -131,6 +132,7 @@ def main(
     estimated_query_latency=10e-3,
     estimated_feed_latency=10e-3,
     lateness_margin=100e-3, # when events are playing later than this, slow down
+    soft_lateness_margin=50e-3, # when events are playing later than this, slow down
     soundfont=None,
     limit_input=None,
     # thru_vel_offset=None,
@@ -213,13 +215,17 @@ def main(
             running `notochord files` will show its location.
 
         midi_prompt:
-            path to a MIDI file to read in as a prompt
+            path to a MIDI file to read in as a prompt.
+            note that prompts can alternatively be associated with presets 
+            in `homunculus.toml`
         prompt_instruments:
             if True, set unmuted instruments to those in the prompt file
         prompt_channel_order:
             method to re-order the channels in a MIDI prompt
-            default None (leave as they are)
-            'sort': sort by instrument ID and map to contiguous channels
+            'channel' (default, leave as they are in file)
+            'instrument': sort by instrument ID 
+                (keeping associated anonymous IDs together)
+            'notes': sort by most notes
 
         seed:
             global random seed (added to preset random seed)
@@ -337,22 +343,46 @@ def main(
             p.preset:p
             for p in soundfont.presets 
             if hasattr(p,'bank') and p.bank==0}
-        
+        sf_drum_presets = {
+            p.preset:p
+            for p in soundfont.presets 
+            if hasattr(p,'bank') and p.bank==128}
+
         def _get_range(i):
             if i>128:
-                return 0, 127
-            lo, hi = 127,0
-            for b in sf_presets[i-1].bags:
-                if Sf2Gen.OPER_INSTRUMENT not in b.gens: 
-                    continue
-                if b.key_range is None: 
-                    return 0, 127
-                l,h = b.key_range
-                lo = min(lo, l)
-                hi = max(hi, h)
-            assert lo<hi, (i-1,lo,hi)
-            return lo, hi
-        sf_inst_ranges = {i:_get_range(i) for i in range(1,129)}
+                if i-128 in sf_drum_presets:
+                    p = sf_drum_presets[i-128]
+                else:
+                    p = sf_drum_presets[0]
+            else:
+                if i-1 in sf_presets:
+                    p = sf_presets[i-1]
+                else:
+                    p = sf_presets[0]
+            print('\n',p)
+            # union of bags in preset
+            # bag: intersection of range with union of bags in instrument
+            preset_range = set()
+            for b in p.bags:
+                bag_range = set()
+                if Sf2Gen.OPER_INSTRUMENT in b.gens: 
+                    inst = soundfont.instruments[b[Sf2Gen.OPER_INSTRUMENT].amount]
+                    print('\t', inst)
+                    for bi in inst.bags:
+                        if Sf2Gen.OPER_SAMPLE_ID in bi.gens:
+                            if bi.key_range is not None:
+                                l,h = bi.key_range
+                                bag_range |= set(range(l, h+1))
+                if b.key_range is not None: 
+                    # print(b.key_range)
+                    l,h = b.key_range
+                    bag_range &= set(range(l, h+1))
+                preset_range |= bag_range
+            # print(f'{preset_range=}')
+            if len(preset_range):
+                return min(preset_range), max(preset_range)
+            return 0, 127
+        sf_inst_ranges = {i:_get_range(i) for i in range(1,257)}
     def get_range(i):
         return sf_inst_ranges.get(i, (0,127))
 
@@ -386,10 +416,14 @@ def main(
 
     except Exception:
         print('WARNING: failed to load presets from file')
+        print(traceback.print_exc(file=tui))
         global_config = {}
         presets = {}
         control_meta = []
         action_meta = []
+
+    print(f'{global_config=}')
+    # print(f'{presets=}')
 
     # store control values
     controls = {ctrl['name']:ctrl.get('value', None) for ctrl in control_meta}
@@ -410,16 +444,22 @@ def main(
         """default values for presets
         all fields should appear here, even if default is None
         """
+        d = global_config['default']
+        # toml_file's get method also sets the value for some reason??
+        # and it refuses to set a None value...
+        def get(k, default):
+            return d[k] if k in d else default
         return {
-            'mode':'auto', 
-            'inst':noto.first_anon_like(1), 
-            'mute':True, 
-            'source':max(1,i-1), 
-            'note_shift':0,
-            'duration':None,
-            'poly':None,
-            'range':None,
-            'transpose':None
+            'mode': get('mode', 'auto'), 
+            'inst': noto.first_anon_like(1),
+            'mute': get('mute', True), 
+            'source': max(1,i-1), 
+            'note_shift': get('note_shift', 0),
+            'duration': get('duration', None),
+            'poly': get('poly', None),
+            'range': get('range', None),
+            'transpose': get('transpose', None),
+            'cc': get('cc', toml_file.Config())
             }
     
     # convert MIDI channels to int
@@ -441,7 +481,8 @@ def main(
                 if p.is_file()
                 ])
         noto.reset()
-        initial_state, inst_data = noto.prompt(prompt_file, merge=merge_channels)
+        initial_state, inst_data = noto.prompt(
+            prompt_file, merge=merge_channels)
         # first get the 16 most active parts
         insts = sorted(inst_data, key=lambda x: -inst_data[x].notes)[:16]
         # then order them onto channels
@@ -496,13 +537,12 @@ def main(
                 channel_order=p.get('prompt_channel_order'),
                 seed=prompt_seed
                 )
-            print(f'{prompt_cfg=}')
+            # print(f'{prompt_cfg=}')
             preset_cfg = p['channel']
-            for k,chan in prompt_cfg.items():
-                if k in preset_cfg:
-                    chan.update(preset_cfg[k])
-                preset_cfg[k] = chan
-            print(p['channel'])
+            for k,chan_cfg in prompt_cfg.items():
+                chan_cfg.update(preset_cfg.get(k, {}))
+                preset_cfg[k] = chan_cfg
+            print(f"preset channel config: {preset_cfg}")
 
     # def validate_config():
     #     assert all(
@@ -610,6 +650,7 @@ def main(
             self.next_event_time = event['time'] + (
                 self.last_event_time or now())
         def time_since(self):
+            """current actual time since nominal time of last played event"""
             if self.last_event_time is None:
                 return 0
             else:
@@ -649,6 +690,7 @@ def main(
         if tag is None:
             return
         now = str(datetime.now())[:-2]
+        # tstr = "O" if kw["time"]<=1e-3 else ""
         s = f'{now}   inst {inst:3d}   pitch {pitch:3d}   vel {vel:3d}   ch {channel:2d} {tag}'
         # s = f'{tag}:\t{inst=:4d}   {pitch=:4d}   {vel=:4d}   {channel=:3d}'
         if memo is not None:
@@ -889,11 +931,15 @@ def main(
             min_time = min_time-estimated_feed_latency
         # print(f'{immediate=} {min_time=}')
 
+        # print(f'{pending.lateness=} {pending.time_since()=}')
+
         if pending.lateness > lateness_margin:
-            backoff = pending.time_since() + pending.lateness/2
+            # backoff = pending.time_since()# + pending.lateness/2
+            # backoff = pending.time_since()/2
+            backoff = pending.lateness/2
             if backoff > min_time:
                 min_time = backoff
-                print(f'set {min_time=} due to lateness')
+                print(f'set {min_time=} due to {pending.lateness=}')
 
         # if max_time < min_time, exclude input instruments
         input_late = max_time is not None and max_time < min_time
@@ -912,6 +958,10 @@ def main(
         steer_pitch = controls.get('steer_pitch', 0.5)
         steer_density = controls.get('steer_density', 0.5)
         steer_velocity = controls.get('steer_velocity', 0.5)
+
+        if pending.lateness > soft_lateness_margin and pending.lateness <= lateness_margin:
+            steer_time = 1
+            print(f'set {steer_time=} due to lateness')
 
         rhythm_temp = controls.get('rhythm_temp', 1)
         timing_temp = controls.get('timing_temp', 1)
@@ -1176,11 +1226,12 @@ def main(
         cfg = config[channel]
 
         if not (punch_in or channel in mode_chans('input')):
-            print(f'WARNING: ignoring MIDI {msg} on non-input channel')
+            print(f"{channel=} {mode_chans('input')=}")
+            print(f'WARNING: ignoring MIDI {msg} on non-input channel {channel}')
             return
         
         if cfg['mute']:
-            print(f'WARNING: ignoring MIDI {msg} on muted channel')
+            print(f'WARNING: ignoring MIDI {msg} on muted channel {channel}')
             return
 
         inst = channel_inst(channel)
@@ -1380,6 +1431,13 @@ def main(
         if update:
             update_config()
 
+    def set_cc(c, ccs, update=True):
+        # print(f'{c=}, {ccs=}')
+        for k,v in ccs.items():
+            k = int(k)
+            midi.send('control_change', channel=c-1, control=k, value=v)
+            # print(f'{(k,v)=}')
+
     # @lock
     def set_preset(p, update=True):
         nonlocal initial_state
@@ -1421,19 +1479,24 @@ def main(
                         update=False)
                 if 'mute' in v:
                     set_mute(c, v.pop('mute'), update=False)
+                if 'cc' in v:
+                    set_cc(c, v.pop('cc'), update=False)
                 config[c].update(v)
         else:
             # deterministically apply preset on top of defaults
             # for c in range(16,0,-1):    
             for c in range(1,17):    
                 v = default_config_channel(c)
-                v.update(cfg.get(c, {}))
+                # v.update(cfg.get(c, {}))
+                deep_update(v, cfg.get(c, {}))
+                print(f'{v=}')
                 set_mode(c, v.pop('mode'), update=False)
                 set_inst(
                     c, v.pop('inst'), 
                     program=v.pop('program_inst', None), 
                     update=False)
                 set_mute(c, v.pop('mute'), update=False)
+                set_cc(c, v.pop('cc'), update=False)
                 config[c].update(v)
 
         if update:

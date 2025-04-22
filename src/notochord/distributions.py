@@ -1,5 +1,4 @@
 import math
-import numpy as torch
 import torch
 from torch import nn
 import torch.distributions as D
@@ -201,7 +200,7 @@ class CensoredMixtureLogistic(nn.Module):
     # e.g. nucleus sampling on the categorical distribution?
     def sample(self, h, truncate=None, shape=None, 
         weight_top_p=None, component_temp=None, bias=None, 
-        truncate_quantile=None, quantile_k=1024, eps=1e-9
+        truncate_quantile=None, quantile_k=128, eps=1e-9
         ):
         """
         Args:
@@ -223,6 +222,9 @@ class CensoredMixtureLogistic(nn.Module):
         Returns:
             Tensor[*shape,...] (h without last dimension, prepended with `shape`)
         """
+        if truncate_quantile == (0,1):
+            truncate_quantile = None
+
         if truncate is None:
             truncate = (-torch.inf, torch.inf)
         # early out in the single possibility case
@@ -240,7 +242,6 @@ class CensoredMixtureLogistic(nn.Module):
         if truncate_quantile is not None:
             # draw k samples
             shape = shape * quantile_k
-
 
         if component_temp is None:
             component_temp = 1
@@ -261,16 +262,6 @@ class CensoredMixtureLogistic(nn.Module):
             # reweight with top_p
             probs = reweight_top_p(probs+eps, weight_top_p)
 
-        # if not probs.isfinite().all():
-            # print(f'{probs=}')
-
-        ## DEBUG
-        # print(loc)
-        # print(s)
-        # print(trunc_probs)
-        # print(probs)
-        #, log_pi.exp(), trunc_probs)
-        # print(probs+eps)
         probs = probs.clamp(eps, 1)
         c = D.Categorical(probs).sample((shape,))
         # move sample dimension first
@@ -285,14 +276,12 @@ class CensoredMixtureLogistic(nn.Module):
 
         u = u.clamp(eps, 1-eps)
 
-        # x = loc + scale * (u.log() - (1 - u).log())
         x = loc + bias - scale * (1/u - 1).log()
-
-        # if not x.isfinite().all():
-            # print(f'{x=} {u=}')
 
         if truncate_quantile is not None:
             x = x.sort(dim=0).values
+
+            # print(truncate_quantile, list(x_.item() for x_ in x))
 
             idx = categorical_sample(
                 x.new_zeros(x.shape[0]), 
