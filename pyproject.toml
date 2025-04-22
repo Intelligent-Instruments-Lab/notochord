@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "notochord"
-version = "0.7.0b0"
+version = "0.7.0b1"
 description = "Notochord is a real-time neural network model for MIDI performances."
 authors = ["Victor Shepardson <victor.shepardson@gmail.com>"]
 license = "MIT"
@@ -15,7 +15,7 @@ tqdm = "^4.64"
 audioop-lts = { version = "*", markers = "python_version >= '3.13'" }
 sf2utils = "^1.0.0"
 appdirs = "^1.4.4"
-iipyper = {path = "../iipyper", develop = true}
+iipyper = "~0.4.0b0"
 toml-file = "^1.0.5"
 joblib = "^1.4.2"
 
