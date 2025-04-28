@@ -1741,6 +1741,7 @@ class InstrumentData:
 def prompt(
     noto:Notochord, midi_file:str|Path, 
     merge:bool=False, insert_threshold:Number=0.05, 
+    jitter:Number=1e-4,
     state_hash:int|None=None): 
     # state_hash is used for disk cache only
     """Read a MIDI file and feed events to a Notochord model.
@@ -1774,7 +1775,7 @@ def prompt(
     noto_channel_inst = defaultdict(next_anon)
     # tracks the original instrument when anon is used to disambiguate parts
     # note the 'original' instrument is still anon when there is no PC on channel
-    orig_channel_inst = defaultdict(lambda c: noto_channel_inst[c])
+    orig_channel_inst = {}#defaultdict(lambda c: noto_channel_inst[c])
     # metadata for each instrument
     inst_data = defaultdict(InstrumentData)
 
@@ -1799,6 +1800,15 @@ def prompt(
         noto_channel_inst[chan] = inst
         orig_channel_inst[chan] = orig_inst
 
+    def feed_event(inst, pitch, dt, vel):
+        # move noteOffs earlier, noteOns later,
+        # to resemble training data augmentation better
+        if vel==0:
+            dt = max(jitter, dt-jitter)
+        else:
+            dt = dt+jitter
+        noto.feed(inst, pitch, dt, vel)
+
     for msg in tqdm(mid, desc='ingesting MIDI prompt'):
         chan = msg.channel if hasattr(msg, 'channel') else None
         # when iterating over a track this is ticks,
@@ -1820,8 +1830,10 @@ def prompt(
             if chan not in noto_channel_inst and chan==9:
                 set_inst(chan, noto.first_anon_like(129))
 
-            orig_inst = orig_channel_inst[chan]
             inst = noto_channel_inst[chan]
+            orig_inst = (
+                orig_channel_inst[chan] if chan in orig_channel_inst 
+                else noto_channel_inst[chan])
             pitch = msg.note
             dt = time_seconds - prev_time_seconds
             vel = msg.velocity if msg.type=='note_on' else 0
@@ -1840,7 +1852,7 @@ def prompt(
                     dropped_notes.add((chan, pitch))
                     if dur > insert_threshold:
                         # if inst==50: tqdm.write(f'insert {dur=}')
-                        noto.feed(inst, pitch, dt, 0)
+                        feed_event(inst, pitch, dt, 0)
                         d.shortened += 1
                         dt = 0
                     else:
@@ -1865,7 +1877,7 @@ def prompt(
             d.channels.add(chan)
 
             # event_count[mid_channel_inst[msg.channel]] += 1
-            noto.feed(inst, pitch, dt, vel)
+            feed_event(inst, pitch, dt, vel)
             prev_time_seconds = time_seconds
 
         else: continue

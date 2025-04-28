@@ -227,6 +227,8 @@ def main(
             'channel' (default, leave as they are in file)
             'instrument': sort by instrument ID 
                 (keeping associated anonymous IDs together)
+            'instrument_drums': sort by instrument ID,
+                but with drums starting on channel 10
             'notes': sort by most notes
         prompt_merge:
             if True, merge multiple channels with the same GM program into one
@@ -484,11 +486,13 @@ def main(
                 prompt_file.glob('**/*')
                 if p.is_file()
                 ])
+        print(f'{prompt_file=}')
         noto.reset()
         initial_state, inst_data = noto.prompt(
             prompt_file, merge=merge_channels)
         # first get the 16 most active parts
         insts = sorted(inst_data, key=lambda x: -inst_data[x].notes)[:16]
+        print(f'{inst_data=}')
         # then order them onto channels
         def make_cfg(i):
             return {
@@ -500,6 +504,28 @@ def main(
                 c+1:make_cfg(i)
                 for c,i in enumerate(sorted(
                     insts, key=lambda k: (inst_data[k].orig_inst, k)))}
+        elif channel_order=='instrument_drums':
+            insts = sorted(insts, key=lambda k: (inst_data[k].orig_inst, k))
+            drum_insts = [i for i in insts if noto.is_drum(i)]
+            mel_insts = [i for i in insts if i not in drum_insts]
+            config = {c+10:make_cfg(i) for c,i in enumerate(drum_insts)}
+            cs = sorted(set(range(1,17)) - set(config))
+            config.update({c:make_cfg(i) for c,i in zip(cs, mel_insts)})
+        elif channel_order=='main_keyboard_first':
+            drum_insts = [i for i in insts if noto.is_drum(i)]
+            kb_insts = []
+            nonkb_insts = []
+            for i in insts:
+                if i in drum_insts: continue
+                l,h = get_range(inst_data[i].orig_inst)
+                if l<=21 and h>=108:
+                    kb_insts.append(i)
+                else:
+                    nonkb_insts.append(i)
+            mel_insts = kb_insts + nonkb_insts
+            config = {c+10:make_cfg(i) for c,i in enumerate(drum_insts)}
+            cs = sorted(set(range(1,17)) - set(config))
+            config.update({c:make_cfg(i) for c,i in zip(cs, mel_insts)})
         elif channel_order=='notes':
             config = {c+1:make_cfg(i) for c,i in enumerate(insts)}
         elif channel_order=='channel' or channel_order is None:
@@ -547,7 +573,7 @@ def main(
             for k,chan_cfg in prompt_cfg.items():
                 chan_cfg.update(preset_cfg.get(k, {}))
                 preset_cfg[k] = chan_cfg
-            print(f"preset channel config: {preset_cfg}")
+            # print(f"preset channel config: {preset_cfg}")
 
     # def validate_config():
     #     assert all(
