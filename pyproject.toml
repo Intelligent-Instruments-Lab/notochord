@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "notochord"
-version = "0.7.0b0"
+version = "0.7.2b0"
 description = "Notochord is a real-time neural network model for MIDI performances."
 authors = ["Victor Shepardson <victor.shepardson@gmail.com>"]
 license = "MIT"
@@ -19,6 +19,14 @@ iipyper = {path = "../iipyper", develop = true}
 toml-file = "^1.0.5"
 joblib = "^1.4.2"
 
+# optional deps
+transformers = {version = "~4.39", optional = true}
+tensorboard = {version = "^2.17.1", optional = true}
+
+[tool.poetry.extras]
+train = ["tensorboard"]
+morse = ["transformers"]
+
 [tool.poetry.group.dev.dependencies]
 mkdocs = "^1.5.3"
 mkdocstrings = {extras = ["python"], version = "^0.23.0"}
@@ -27,12 +35,6 @@ mkdocs-include-markdown-plugin = "^6.0.4"
 mkdocs-material = "^9.4.8"
 mkdocs-material-extensions = "^1.3"
 mkdocs-autorefs = "^0.5.0"
-
-[tool.poetry.group.morse.dependencies]
-transformers = "~4.39"
-
-[tool.poetry.group.train.dependencies]
-tensorboard = "^2.17.1"
 
 [build-system]
 requires = ["poetry-core"]

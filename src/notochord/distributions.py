@@ -255,7 +255,7 @@ class CensoredMixtureLogistic(nn.Module):
 
         # cdfs: [...,bound,component]
         cdfs = self.cdf_components(loc[...,None,:], s[...,None,:], truncate) 
-        # prob. mass of each component witin bounds
+        # prob. mass of each component within bounds
         trunc_probs = cdfs[...,1,:] - cdfs[...,0,:] # [...,component]
         probs = log_pi.exp() * trunc_probs # reweighted mixture component probs
         if weight_top_p is not None:

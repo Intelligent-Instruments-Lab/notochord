@@ -53,6 +53,7 @@ class NotoPerformance:
     """
     def __init__(self):
         self._notes:Dict[Note, Any] = {} 
+        self._last_event = defaultdict(lambda: defaultdict(int)) # time of last event by [channel][kind]
         self.past_segments:List[pd.DataFrame] = []
         self.init()
 
@@ -66,6 +67,7 @@ class NotoPerformance:
             ('channel',np.int8), # MIDI channel
             ]))
         self._notes.clear()
+        self._last_event.clear()
         
     def push(self):
         """push current events onto a list of past segments,
@@ -91,6 +93,8 @@ class NotoPerformance:
         if 'channel' not in event:
             # use -1 for missing channel to avoid coercion to float
             event['channel'] = -1 
+        self._last_event[event['channel']][event['vel'] > 0] = event['wall_time_ns']
+
         cast_event = {}
         for k,v in event.items():
             if k in self.events.columns:
@@ -109,6 +113,13 @@ class NotoPerformance:
             self._notes[k] = held_note_data
         else:
             self._notes.pop(k, None)
+
+    def last_event_time_ns(self, channel=None, on=None):
+        if channel is None:
+            return max(self.last_event_time_ns(c, on) for c in range(1,17))
+        if on is None:
+            return max(self.last_event_time_ns(channel, b) for b in (True, False))
+        return self._last_event.get(channel, {}).get(on, None)
    
     def inst_counts(self, n=0, insts=None):
         """instrument counts in last n (default all) note_ons"""

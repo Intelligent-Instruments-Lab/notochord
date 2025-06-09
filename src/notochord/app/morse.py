@@ -44,6 +44,7 @@ def main(
         noto_space=False, # does notochord contribute to prediction of ' ' char
         buffer_events=8,
         device='cpu',
+        upper=True,
         ):
     midi = MIDI(midi_in, midi_out)
 
@@ -74,7 +75,6 @@ def main(
     if send_pc:
         do_send_pc(noto_channel, noto_inst)
 
-
     print(f'loading language model {lm}')
     logging.disable()
     with warnings.catch_warnings():
@@ -86,6 +86,10 @@ def main(
 
     tokens = tokenizer.batch_decode(range(len(tokenizer)))
     alphabet = 'abcdefghijklmnopqrstuvwxyzðþöéæ"\'+-=/.,:;!?() '
+    if upper:
+        alphabet = alphabet.upper()
+        prompt = prompt.upper()
+        MorseNode.upper = True
     alphabet = set(alphabet)
     # indices of within-vocab tokens
     token_idx = [
@@ -566,12 +570,15 @@ def main(
         release_all()
 
 class MorseNode:
+    upper:bool = False
     def __init__(self, 
             char:str=None, 
             prob:float=0, 
             dit:'MorseNode'=None, 
             dah:'MorseNode'=None
         ):
+        if char is not None and MorseNode.upper:
+            char = char.upper()
         self.char = char
         self.prob = prob
         self.dit = dit

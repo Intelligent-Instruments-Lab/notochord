@@ -202,8 +202,10 @@ class MIDIDataset(Dataset):
 
         # dequantize: add noise up to +/- margin
         # move note-ons later, note-offs earlier
+        # NOTE this actually did the opposite of previous comment!
+        # models trained before May 2025 were affected
         time = (time + 
-            torch.rand_like(time) * ((velocity==0).double()*2-1) * time_margin
+            torch.rand_like(time) * ((velocity>0).double()*2-1) * time_margin
         )
         # random augment tempo
         time = time * (1 + random.random()*self.speed*2 - self.speed)

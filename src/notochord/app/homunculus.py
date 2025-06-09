@@ -102,9 +102,12 @@ def main(
     suppress_midi_feedback=True,
     input_channel_map=None,
 
+    stop_on_reset=False, # 
+    stop_on_unmute=False, # 
     stop_on_end=False, # auto channels stop when end is sampled
     reset_on_end=False, # reset notochord when end is sampled
     end_exponent=1, # < 1 makes end more likely, >1 less likely
+    end_thresh=None, # cumulative probability for deterministic end
     min_end_time=8, # prevent sampling end before this many seconds since reset
 
     balance_sample=False, # choose instruments which have played less recently
@@ -121,8 +124,8 @@ def main(
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
 
-    punch_in=False, # EXPERIMENTAL. this causes all channels to switch between auto and input mode when input is received or not
-    punch_out_after=1.0, # time in seconds from last input to revert to auto
+    punch_in=None, # DEPRECATED. now configured per-channel
+    punch_out_after=None, # DEPRECATED. now configured per-channel
 
     use_tui=True, # run textual UI
     predict_input=True, # forecasted next events can be for input (preserves model distribution, but can lead to Notochord deciding not to play)
@@ -207,6 +210,15 @@ def main(
             to an 'anonymous' instrument number (but it will still respect 
             the chosen instrument when using --send-pc)
 
+            additional per-voice options:
+            poly: pair of (min, max) simultaneous notes 
+                (min should be 0 in most cases)
+            duration: pair of (min, max) note duration
+            punch_in: this causes the voice to switch between
+                auto and input mode when input is received or not
+            punch_out_after: time in seconds from last input NoteOn to revert   
+                to auto mode
+
         preset: 
             preset name (in preset file) to load config from
         preset_file: 
@@ -221,7 +233,7 @@ def main(
         prompt_config:
             if True, set unmuted instruments to those in the prompt file.
             prompt config overrides presets,
-            but config from the `--condfig flag` will override the prompt
+            but config from the `--config flag` will override the prompt
         prompt_channel_order:
             method to re-order the channels in a MIDI prompt
             'channel' (default, leave as they are in file)
@@ -291,11 +303,6 @@ def main(
             hostname or IP of OSC sender.
             leave this as empty string to get all traffic on the port
 
-        punch_in: EXPERIMENTAL. this causes all channels to switch between
-            auto and input mode when input is received or not
-        punch_out_after: time in seconds from last input NoteOn to revert to 
-            auto mode
-
         use_tui: 
             run textual UI.
         predict_input: 
@@ -331,6 +338,11 @@ def main(
     # backwards compat
     if initial_query is not None:
         initial_stop = not initial_query
+    if punch_in is not None or punch_out_after is not None:
+        raise ValueError("""
+            punch_in and punch_out_after are now per-voice; 
+            use --config flag or edit homunculus.toml
+        """)
 
     estimated_latency = estimated_feed_latency + estimated_query_latency
 
@@ -465,7 +477,9 @@ def main(
             'poly': get('poly', None),
             'range': get('range', None),
             'transpose': get('transpose', None),
-            'cc': get('cc', toml_file.Config())
+            'cc': get('cc', toml_file.Config()),
+            'punch_in': get('punch_in', False),
+            'punch_out_after': get('punch_out_after', 0.25),
             }
     
     # convert MIDI channels to int
@@ -528,6 +542,10 @@ def main(
             config.update({c:make_cfg(i) for c,i in zip(cs, mel_insts)})
         elif channel_order=='notes':
             config = {c+1:make_cfg(i) for c,i in enumerate(insts)}
+        elif isinstance(channel_order, list):
+            config = {
+                channel_order[min(inst_data[i].channels)]:make_cfg(i) 
+                for i in reversed(insts)}
         elif channel_order=='channel' or channel_order is None:
             # NOTE this takes the minimum channel if an instrument
             # appears on multiple channels
@@ -606,7 +624,8 @@ def main(
         for v in config.values():
             i = v['inst']
             if i in insts:
-                s = set(range(*(v.get('range') or get_range(i))))
+                lo, hi = v.get('range') or get_range(i) # inclusive range
+                s = set(range(lo, hi+1))
                 if i in r:
                     r[i] |= s
                 else:
@@ -663,6 +682,8 @@ def main(
             self.stopped = False
             self.last_event_time = None
             self.lateness = 0
+            # self.on_cum_end_prob = 0
+            # self.off_cum_end_prob = 0
             self.cum_end_prob = 0
             self.clear()
         def clear(self):
@@ -698,11 +719,23 @@ def main(
         def sample_end(self):
             if self.event is None:
                 return False
+            
             end_prob = self.event.get('end', 0) ** end_exponent
-            # cumulative end probability
             self.cum_end_prob = 1 - (1-self.cum_end_prob)*(1-end_prob)
             # print(f'{self.cum_end_prob=}')
-            return random.random() < end_prob
+
+            if self.event['vel']>0:
+                # self.on_cum_end_prob = 1 - (1-self.on_cum_end_prob)*(1-end_prob)
+                # print(f'{self.on_cum_end_prob=}')
+                return False
+            # else:
+            #     self.off_cum_end_prob = 1 - (1-self.off_cum_end_prob)*(1-end_prob)
+            #     print(f'{self.off_cum_end_prob=}')
+            # # cumulative end probability
+            if end_thresh is None:
+                return random.random() < end_prob
+            else:
+                return self.cum_end_prob > end_thresh
     pending = Prediction()    
 
     # tracks held notes, recently played instruments, etc
@@ -842,7 +875,8 @@ def main(
                         pending.set(noto.query(
                             next_inst=noto_inst, next_time=dt, next_vel=source_vel,
                             include_pitch=pitches))
-                    
+                        
+                pending.sample_end() # track cumulative end prob
                 play_event(
                     noto_channel, feed=feed,
                     parent=source_k, tag='NOTO', memo='follow')
@@ -881,6 +915,9 @@ def main(
         # reset history
         history.push()
 
+        if stop_on_reset:
+            noto_stop()
+
         # TODO: feed note-ons from any held input/follower notes?
 
     # @lock
@@ -903,6 +940,9 @@ def main(
             if not sustain:
                 end_held(memo='mute')
             pending.clear()
+        else:
+            if stop_on_unmute:
+                noto_stop()
 
     def noto_stop():
         print('STOP')
@@ -1125,14 +1165,19 @@ def main(
     # very basic CC handling for controls
     control_cc = {}
     control_osc = {}
+    control_note = {} # note number : (control, value)
     for ctrl in control_meta:
         name = ctrl['name']
         ccs = ctrl.get('control_change', [])
+        note_values = ctrl.get('note_value', {})
         if isinstance(ccs, Number) or isinstance(ccs, str):
             ccs = (ccs,)
         for cc in ccs:
             control_cc[cc] = ctrl
+        for note, value in note_values.items():
+            control_note[int(note)] = (ctrl, value)
         control_osc[f'/notochord/homunculus/{name}'] = ctrl
+    # print(f'{control_note=}')
     action_cc = {}
     action_note = {}
     action_osc = {}
@@ -1190,6 +1235,7 @@ def main(
     if midi_control is not None:
         preset_keys = range(112,120)
         momentary_keys = [120]
+        # TODO: add toggle keys
         for note in preset_keys:
             midi_control.note_on(
                 channel=0, note=note, velocity=0)
@@ -1197,6 +1243,13 @@ def main(
         @midi_control.handle(type=('note_on'))
         def _(msg, port):
             print('control note event', msg)
+
+            if msg.velocity and msg.note in control_note:
+                ctrl, value = control_note[msg.note]
+                name = ctrl['name']
+                # lo, hi = ctrl.get('range', (0,1)) # TODO
+                controls[name] = value
+                print(f"{name}={controls[name]}")
 
             if msg.velocity and msg.note in action_note:
                 k = action_note[msg.note]['name']
@@ -1248,15 +1301,15 @@ def main(
         channel = msg.channel + 1
         # convert from 0-index
         channel = input_channel_map.get(channel, channel)
-
-        if punch_in:
-            # set_mode(channel, 'input')
-            action_queue.append(ft.partial(set_mode, channel, 'input'))
-
         cfg = config[channel]
 
-        if not (punch_in or channel in mode_chans('input')):
-            print(f"{channel=} {mode_chans('input')=}")
+        if cfg['punch_in']:
+            # set_mode(channel, 'input')
+            # print(f'punch {channel=} {cfg=}')
+            action_queue.append(ft.partial(set_mode, channel, 'input'))
+
+        if not (cfg['punch_in'] or channel in mode_chans('input')):
+            # print(f"{channel=} {mode_chans('input')=}")
             print(f'WARNING: ignoring MIDI {msg} on non-input channel {channel}')
             return
         
@@ -1293,6 +1346,7 @@ def main(
     def do_note_input(channel, inst, pitch, vel):
         # feed event to Notochord
         pending.set({'inst':inst, 'pitch':pitch, 'vel':vel})
+        pending.sample_end() # track cumulative end prob
         play_event(channel=channel, send=thru, tag='PLAYER')
 
     @profile(print=print, enable=profiler)
@@ -1332,21 +1386,17 @@ def main(
 
     # @profile(print=print, enable=profiler)
     def maybe_punch_out():
-        none_held = set(mode_chans('input'))
-        for c,_,_ in history.notes:
-            if c in none_held:
-                none_held.remove(c)
+        if not any(cfg['punch_in'] for cfg in config.values()):
+            return
 
-        evt = history.events
-        recent_events = evt[
-            (evt.vel > 0) &
-            (evt.wall_time_ns > time.time_ns() - punch_out_after*1e9)
-            ]
+        none_held = set(mode_chans('input')) - {c for c,_,_ in history.notes}
+
         for c in none_held:
-            # print(recent_events.channel)
-            # print(f'{c=} {(c not in recent_events.channel)=}')
-            if c not in recent_events.channel.values:
-                set_mode(c, 'auto')
+            if config[c]['punch_in']:
+                after = config[c]['punch_out_after']
+                t = history.last_event_time_ns(channel=c, on=True)
+                if t is not None and t < time.time_ns() - after*1e9:
+                    set_mode(c, 'auto')
 
     @cleanup
     def _():
@@ -1497,6 +1547,7 @@ def main(
 
     def set_config(cfg, overlay=False, update=True):
         # NOTE: config should *not* be updated before calling set_* 
+        # TODO: need to force notes off if note_shift changes
         if overlay:
             # just apply settings which are in the preset
             for c in sorted(cfg):
@@ -1739,8 +1790,7 @@ def main(
             if pending.event != prediction_displayed[0]:
                 tui.defer(prediction=pending.event)
                 prediction_displayed[0] = pending.event
-            if punch_in:
-                maybe_punch_out()
+            maybe_punch_out()
 
         # TODO note sure if this is needed anymore
         # adaptive time resolution here -- yield to other threads when 
@@ -1882,11 +1932,11 @@ class NotoTUI(TUI):
     CSS_PATH = 'homunculus.css'
 
     BINDINGS = [
-        ("m", "mute", "Mute Notochord"),
+        ("m", "mute", "Mute"),
         ("s", "sustain", "Sustain"),
-        ("q", "query", "Re-query Notochord"),
-        ("x", "stop", "Stop Notochord"),
-        ("r", "reset", "Reset Notochord"),
+        ("q", "query", "Re-query"),
+        ("x", "stop", "Stop"),
+        ("r", "reset", "Reset"),
         ("1", "preset1", ""),
         ("2", "preset2", ""),
         ("3", "preset3", ""),
