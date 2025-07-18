@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/722231412.svg)](https://doi.org/10.5281/zenodo.16116595)
+
 # Notochord ([Documentation](https://intelligent-instruments-lab.github.io/notochord/) | [Paper](https://zenodo.org/record/7088404 "Notochord AIMC 2022 paper") | [Video](https://www.youtube.com/watch?v=mkBKAyudL0A "Notochord AIMC 2022 video"))
  
 <div align="middle">
