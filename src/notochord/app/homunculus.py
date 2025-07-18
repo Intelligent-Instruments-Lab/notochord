@@ -1202,6 +1202,8 @@ def main(
             action_queue.append(auto_query)
         elif k=='mute':
             action_queue.append(noto_mute)
+        elif k=='sustain':
+            action_queue.append(ft.partial(noto_mute, sustain=True))
         elif k=='preset':
             action_queue.append(ft.partial(set_preset, v or 0))
         elif k=='preset_reset':
