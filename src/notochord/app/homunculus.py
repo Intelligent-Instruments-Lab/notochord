@@ -1322,6 +1322,10 @@ def main(
         inst = channel_inst(channel)
         pitch = msg.note + cfg.get('note_shift', 0)
         vel = msg.velocity if msg.type=='note_on' else 0
+
+        if vel==0 and (inst,pitch) not in noto.held_notes:
+            print(f'WARNING: ignoring double Note Off on input channel {channel}')
+            return
         
         dt = input_sw.punch()
         # print(f'EVENT {dt=} {msg}')
@@ -1474,7 +1478,7 @@ def main(
             i = min(set(noto.anon_like(i)) - lower_insts)
 
         # end held notes on old instrument
-        if prev_i!=i and config[c]['mode']!='input':
+        if prev_i!=i:# and config[c]['mode']!='input':
             end_held(channel=c, memo='instrument change')
             pending.clear()
 
@@ -1504,9 +1508,9 @@ def main(
         if b:
             print(f'mute channel {c}')
             # release held notes
-            if config[c]['mode']!='input':
-                end_held(channel=c, memo='mute channel')
-                pending.clear()
+            # if config[c]['mode']!='input':
+            end_held(channel=c, memo='mute channel')
+            pending.clear()
         else:
             print(f'unmute channel {c}')
 

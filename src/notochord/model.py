@@ -291,7 +291,7 @@ class Notochord(nn.Module):
                 for i in note_on_map
                 if i in held_map}
         else:
-            note_on_map = copy.deepcopy(note_off_map)
+            note_off_map = copy.deepcopy(note_off_map)
             
         # exclude held notes for note on
         for i in held_map:
@@ -622,6 +622,9 @@ class Notochord(nn.Module):
         # print(f'{result=}')
         # embed, add to hidden, recurse into subquery
         if isinstance(query.then, Query) or hasattr(query.then, '__call__'):
+            # print(f'{result.dtype} {result.dtype==torch.double}')
+            # TODO prevent result from being double in the first place?
+            if result.dtype==torch.double: result = result.float()
             emb = embed(result)
             hidden = hidden + emb
             if (~hidden.isfinite()).any():
@@ -708,6 +711,7 @@ class Notochord(nn.Module):
         max_polyphony:Dict[int,int]|int|None=None,
         min_duration:Dict[int,float]|float|None=None, 
         max_duration:Dict[int,float]|float|None=None, 
+        pitch_temp:float|None=None,
         rhythm_temp:float|None=None, timing_temp:float|None=None,
         truncate_quantile_time:Tuple[float,float]|None=None,
         truncate_quantile_pitch:Tuple[float,float]|None=None,
@@ -754,6 +758,7 @@ class Notochord(nn.Module):
             max_duration: maximum note length per instrument (default 0). Can   
                 be a dict mapping instrument to value, or a single value for 
                 all instruments.
+            pitch_temp: if not None, apply top_p sampling to the pitch.
             rhythm_temp: if not None, apply top_p sampling to the weighting
                 of mixture components. this affects coarse rhythmic patterns;
                 0 is deterministic, 1 is 'natural' according to the model.
@@ -858,7 +863,7 @@ class Notochord(nn.Module):
                 no possible notes {note_on_map=} {note_off_map=}""")
 
         def insts(e):
-            if e['vel'] > 0:
+            if e['vel'] > 0.5:
                 return note_on_map
             else:
                 return {
@@ -868,7 +873,7 @@ class Notochord(nn.Module):
             
         def pitches(e):
             i = e['inst']
-            if e['vel'] > 0:
+            if e['vel'] > 0.5:
                 return note_on_map[i]
             else:
                 return {
@@ -906,6 +911,7 @@ class Notochord(nn.Module):
                     then=lambda e: Query(
                         'pitch', 
                         whitelist=pitches(e),
+                        top_p=pitch_temp,
                         truncate_quantile=(
                             None if (
                                 e['vel']==0 
@@ -923,6 +929,7 @@ class Notochord(nn.Module):
         max_polyphony:Dict[int,int]|int|None=None,
         min_duration:Dict[int,float]|float|None=None, 
         max_duration:Dict[int,float]|float|None=None, 
+        pitch_temp:float|None=None,
         rhythm_temp:float=None, timing_temp:float=None,
         truncate_quantile_time:Tuple[float,float]|None=None,
         truncate_quantile_pitch:Tuple[float,float]|None=None,
@@ -969,6 +976,7 @@ class Notochord(nn.Module):
             max_duration: maximum note length per instrument (default 0). Can   
                 be a dict mapping instrument to value, or a single value for 
                 all instruments.
+            pitch_temp: if not None, apply top_p sampling to the pitch.
             rhythm_temp: if not None, apply top_p sampling to the weighting
                 of mixture components. this affects coarse rhythmic patterns;
                 0 is deterministic, 1 is 'natural' according to the model.
@@ -1079,7 +1087,7 @@ class Notochord(nn.Module):
 
         def note_map(e):
             try:
-                if e['vel'] > 0:
+                if e['vel'] > 0.5:
                     m = note_on_map
                 else:
                     m = note_off_map
@@ -1112,11 +1120,12 @@ class Notochord(nn.Module):
             then=lambda e: Query(
                 'inst', 
                 whitelist={
-                    i:inst_weights.get(i,1) if e['vel'] > 0 else 1 
+                    i:inst_weights.get(i,1) if e['vel'] > 0.5 else 1 
                     for i in note_map(e)},
                 then=lambda e: Query(
                     'pitch', 
                     whitelist=note_map(e),
+                    top_p=pitch_temp,
                     truncate_quantile=(
                         None if (
                             e['vel']==0 
@@ -1126,7 +1135,7 @@ class Notochord(nn.Module):
                     then=lambda e: Query(
                         'time', #'note on' if e['vel']>0 else 'note off',         
                         truncate=(
-                            min_time if e['vel']>0 
+                            min_time if e['vel']>0.5 
                             else soonest_off[(e['inst'],e['pitch'])],
                             latest_event
                         ),
@@ -1329,9 +1338,10 @@ class Notochord(nn.Module):
             else arg_to_set(include_inst)
         ) - exclude_inst)
         if len(constrain_inst)==0:
-            raise ValueError("""
-            every instrument has been excluded. check values of 
-            `include_inst` and `exclude_inst`
+            raise ValueError(f"""
+            every instrument has been excluded. 
+            {include_inst=} 
+            {exclude_inst=}
             """)
         # elif len(constrain_inst)==1:
         #     print("""
