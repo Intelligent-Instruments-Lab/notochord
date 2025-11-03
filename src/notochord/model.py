@@ -253,7 +253,7 @@ class Notochord(nn.Module):
         self.h_query = None
 
         self._default_note_map = {
-            i:range(128) for i in range(1,self.instrument_domain+1)}      
+            i:range(128) for i in range(1,self.instrument_domain)}      
 
     def cell_state_names(self):
         return tuple(f'cell_state_{i}' for i in range(len(self.initial_state)))
@@ -866,6 +866,15 @@ class Notochord(nn.Module):
             if e['vel'] > 0.5:
                 return note_on_map
             else:
+                # here, any instrument with notes over duration (as of sampled t) 
+                # should be prioritized to end
+                overdue = set()
+                for (i_,p_),t_ in self.held_notes.items():
+                    if i_ in note_off_map and max_dur(i) - t_ - e['time'] < 0:
+                        overdue.add(i_)
+                if len(overdue):
+                    return overdue
+                
                 return {
                     i for i,ps in note_off_map.items() if any(
                         soonest_off[(i,p)] <= e['time']+eps for p in ps
@@ -876,6 +885,15 @@ class Notochord(nn.Module):
             if e['vel'] > 0.5:
                 return note_on_map[i]
             else:
+                # here, any notes over duration (as of sampled t) 
+                # should be prioritized to end
+                overdue = set()
+                for (i_,p_),t_ in self.held_notes.items():
+                    if i==i_ and p_ in note_off_map[i_] and max_dur(i) - t_ - e['time'] < 0:
+                        overdue.add(p_)
+                if len(overdue):
+                    return overdue
+                
                 return {
                     p for p in note_off_map[i] 
                     if soonest_off[(i,p)] <= e['time']+eps}
