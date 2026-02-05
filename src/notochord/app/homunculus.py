@@ -100,7 +100,10 @@ def main(
     send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
     suppress_midi_feedback=True,
+    suppress_midi_feedback_window=30e-3,
+    midi_virtual_in_ports=0, midi_virtual_out_ports=0,
     input_channel_map=None,
+    input_vel=None, # use a fixed input velocity, ignoring MIDI value
 
     stop_on_reset=False, # 
     stop_on_unmute=False, # 
@@ -141,6 +144,7 @@ def main(
     # thru_vel_offset=None,
     profiler=0,
     wipe_presets=False,
+    launchpad_control=False,
     ):
     """
     This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. It allows combining both 'harmonizer' and 'improviser' features.
@@ -329,7 +333,11 @@ def main(
         osc = OSC(osc_host, osc_port)
     if midi_in is None and midi_control is not None:
         midi_in = set(mido.get_input_names()) - set(midi_control.split(','))
-    midi = MIDI(midi_in, midi_out, suppress_feedback=suppress_midi_feedback)
+    midi = MIDI(midi_in, midi_out, 
+                suppress_feedback=suppress_midi_feedback,
+                suppress_feedback_window=suppress_midi_feedback_window,
+                virtual_in_ports=midi_virtual_in_ports, 
+                virtual_out_ports=midi_virtual_out_ports)
     if midi_control is not None:
         midi_control = MIDI(
             midi_control, midi_control, 
@@ -350,7 +358,7 @@ def main(
 
     ### Textual UI
     tui = NotoTUI()
-    print = notochord.print = iipyper.print = tui.print
+    print = notochord.model.print = notochord.print = iipyper.print = tui.print
     ###
 
     if soundfont is None:
@@ -507,6 +515,7 @@ def main(
         # first get the 16 most active parts
         insts = sorted(inst_data, key=lambda x: -inst_data[x].notes)[:16]
         print(f'{inst_data=}')
+        print(f'{insts=}')
         # then order them onto channels
         def make_cfg(i):
             return {
@@ -546,6 +555,13 @@ def main(
             config = {
                 channel_order[min(inst_data[i].channels)]:make_cfg(i) 
                 for i in reversed(insts)}
+        elif isinstance(channel_order, dict):
+            inst_by_channel = {
+                c+1:i for i,d in inst_data.items() for c in d.channels}
+            config = {
+                c_noto:make_cfg(inst_by_channel[int(c_file)])
+                for c_file,c_noto in channel_order.items()
+            }
         elif channel_order=='channel' or channel_order is None:
             # NOTE this takes the minimum channel if an instrument
             # appears on multiple channels
@@ -1235,12 +1251,13 @@ def main(
             dispatch_action(k, v)
 
     if midi_control is not None:
-        preset_keys = range(112,120)
-        momentary_keys = [120]
-        # TODO: add toggle keys
-        for note in preset_keys:
-            midi_control.note_on(
-                channel=0, note=note, velocity=0)
+        # NOTE: hardcoded notochord study UI stuff
+        if launchpad_control:
+            preset_keys = range(112,120)
+            momentary_keys = [120]
+            for note in preset_keys:
+                midi_control.note_on(
+                    channel=0, note=note, velocity=0)
             
         @midi_control.handle(type=('note_on'))
         def _(msg, port):
@@ -1258,18 +1275,21 @@ def main(
                 v = action_note[msg.note].get('value')
                 dispatch_action(k, v)
             
-            # MIDI feedback (lights)
-            if msg.note in preset_keys:
-                # if msg.velocity==0: return
-                if msg.velocity>0:
-                    for note in preset_keys:
-                        midi_control.note_on(
-                            channel=0, note=note, velocity=0, port=port)
-                midi_control.note_on(
-                    channel=0, note=msg.note, velocity=70 if msg.velocity else 127, port=port)
-            if msg.note in momentary_keys:
-                midi_control.note_on(
-                    channel=0, note=msg.note, velocity=msg.velocity, port=port)
+            if launchpad_control:
+                # MIDI feedback (lights)
+                if msg.note in preset_keys:
+                    # if msg.velocity==0: return
+                    if msg.velocity>0:
+                        for note in preset_keys:
+                            midi_control.note_on(
+                                channel=0, note=note, velocity=0, port=port)
+                    midi_control.note_on(
+                        channel=0, note=msg.note, 
+                        velocity=70 if msg.velocity else 127, port=port)
+                if msg.note in momentary_keys:
+                    midi_control.note_on(
+                        channel=0, note=msg.note, 
+                        velocity=msg.velocity, port=port)
 
     if osc_port is not None:
         @osc.handle('/notochord/homunculus/*')
@@ -1322,6 +1342,9 @@ def main(
         inst = channel_inst(channel)
         pitch = msg.note + cfg.get('note_shift', 0)
         vel = msg.velocity if msg.type=='note_on' else 0
+
+        if input_vel is not None and vel > 0:
+            vel = input_vel
 
         if vel==0 and (inst,pitch) not in noto.held_notes:
             print(f'WARNING: ignoring double Note Off on input channel {channel}')

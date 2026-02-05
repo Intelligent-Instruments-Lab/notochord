@@ -1,5 +1,5 @@
 import math
-from typing import List, Tuple, Dict, Union, Any
+from typing import List, Tuple, Dict, Union, Any, Sequence, MutableMapping
 from numbers import Number
 from collections import namedtuple, defaultdict
 from pathlib import Path
@@ -128,7 +128,7 @@ class GLU(nn.Module):
         return a * b.sigmoid()
 
 class GLUMLP(nn.Module):
-    def __init__(self, input, hidden, output, layers, dropout=0, norm=None):
+    def __init__(self, input, hidden, output, layers, dropout=0.0, norm:str=None):
         super().__init__()
         h = input
         def get_dropout():
@@ -172,7 +172,7 @@ class Notochord(nn.Module):
         super().__init__()
 
         self.step = 0
-        self.current_time = 0
+        self.current_time = 0.0
         self.held_notes = {}
 
         self.note_dim = 4 # instrument, pitch, time, velocity
@@ -270,8 +270,10 @@ class Notochord(nn.Module):
         return held_map
     
     def get_note_maps(self, 
-        note_on_map=None, note_off_map=None, 
-        min_polyphony=None, max_polyphony=None
+        note_on_map:MutableMapping[int,Sequence[int]]=None, 
+        note_off_map:MutableMapping[int,Sequence[int]]=None, 
+        min_polyphony=None, max_polyphony=None,
+        no_steer=None
         ) -> Tuple[Dict[int,List[int]], Dict[int,List[int]]]:
         """common logic for v-first sampling"""
         # convert {(i,p):t} to {i:[p]}
@@ -313,14 +315,17 @@ class Notochord(nn.Module):
 
         max_poly = get_from_scalar_or_dict(max_polyphony, torch.inf)
         min_poly = get_from_scalar_or_dict(min_polyphony, 0)
+        if no_steer is None: no_steer = []
 
         # prevent note on if polyphony exceeded
         for i in list(note_on_map):
+            if i in no_steer: continue
             if len(held_map.get(i, [])) >= max_poly(i):
                 note_on_map.pop(i)
 
         # prevent note off if below minimum polyphony
         for i in list(note_off_map):
+            if i in no_steer: continue
             if len(held_map[i]) <= min_poly(i):
                 note_off_map.pop(i)
 
@@ -572,6 +577,7 @@ class Notochord(nn.Module):
             params = project(hidden.tanh())
 
             if query.cases is None:
+                # print(f'{query.kw=}')
                 result = sample(params, **query.kw)
                 # print(f'{result=}, {query.kw=}, {event=}') ##DEBUG
 
@@ -718,7 +724,7 @@ class Notochord(nn.Module):
         truncate_quantile_vel:Tuple[float,float]|None=None,
         steer_density:float|None=None,
         inst_weights:Dict[int,float]|None=None,
-        no_steer:List[int]|None=None,
+        no_steer:List[int]|set=None,
         ):
         """
         Query in a fixed velocity->time->instrument->pitch order, sampling all
@@ -729,7 +735,7 @@ class Notochord(nn.Module):
 
         query_vipt is similar, but makes different compromises in applying 
         constraints. VTIP is likely to be better when setting min_time > 0 
-        or otherwise heavily constraing time delta, while VIPT may be better
+        or otherwise heavily constraining time delta, while VIPT may be better
         in other cases.
 
         Args:
@@ -793,7 +799,7 @@ class Notochord(nn.Module):
         no_steer = no_steer or set()
 
         note_on_map, note_off_map = self.get_note_maps(
-            note_on_map, note_off_map, min_polyphony, max_polyphony
+            note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
         )
 
         max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
@@ -863,17 +869,24 @@ class Notochord(nn.Module):
                 no possible notes {note_on_map=} {note_off_map=}""")
 
         def insts(e):
+            # here, any instrument with notes over duration
+            # should be prioritized;
+            # for note off, clearly, but also for note on in case 
+            # of a min polyphony constraint
+            overdue_insts = set()
+            for (i_,p_),t_ in self.held_notes.items():
+                if i_ not in no_steer and max_dur(i_) - t_ - e['time'] < 0:
+                    overdue_insts.add(i_)
             if e['vel'] > 0.5:
+                overdue_insts &= set(note_on_map)
+                if len(overdue_insts):
+                    return overdue_insts
                 return note_on_map
             else:
-                # here, any instrument with notes over duration (as of sampled t) 
-                # should be prioritized to end
-                overdue = set()
-                for (i_,p_),t_ in self.held_notes.items():
-                    if i_ in note_off_map and max_dur(i) - t_ - e['time'] < 0:
-                        overdue.add(i_)
-                if len(overdue):
-                    return overdue
+                overdue_insts &= set(note_off_map)
+                if len(overdue_insts):
+                    return overdue_insts
+                ###
                 
                 return {
                     i for i,ps in note_off_map.items() if any(
@@ -887,12 +900,14 @@ class Notochord(nn.Module):
             else:
                 # here, any notes over duration (as of sampled t) 
                 # should be prioritized to end
-                overdue = set()
+                overdue_pitches = set()
                 for (i_,p_),t_ in self.held_notes.items():
-                    if i==i_ and p_ in note_off_map[i_] and max_dur(i) - t_ - e['time'] < 0:
-                        overdue.add(p_)
-                if len(overdue):
-                    return overdue
+                    if i not in no_steer and i==i_ and max_dur(i) - t_ - e['time'] < 0:
+                        overdue_pitches.add(p_)
+                overdue_pitches &= set(note_off_map)
+                if len(overdue_pitches):
+                    return overdue_pitches
+                ###
                 
                 return {
                     p for p in note_off_map[i] 
@@ -954,7 +969,7 @@ class Notochord(nn.Module):
         truncate_quantile_vel:Tuple[float,float]|None=None,
         steer_density:float=None,
         inst_weights:Dict[int,float]=None,
-        no_steer:List[int]=None,
+        no_steer:List[int]|set[int]=None,
         ):
         """
         Query in a fixed velocity->instrument->pitch->time order, sampling all
@@ -1019,6 +1034,10 @@ class Notochord(nn.Module):
             no_steer: collection of instruments to exclude from effect of 
                 truncate_quantile_pitch and truncate_quantile_time.
         """
+        # NOTE: weird behavior can result when contraints are applied to 
+        # an input voice.
+        # but i don't think it would work well to completely ignore constraints on
+        # inputs; that might also lead to overprediction of inputs?
         eps = 1e-5
         min_time = min_time or 0
         max_time = max_time or torch.inf
@@ -1027,7 +1046,7 @@ class Notochord(nn.Module):
         no_steer = no_steer or set()
 
         note_on_map, note_off_map = self.get_note_maps(
-            note_on_map, note_off_map, min_polyphony, max_polyphony
+            note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
         )
 
         max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
@@ -1088,6 +1107,23 @@ class Notochord(nn.Module):
                 note_off_map.pop(i)
                 continue
 
+        overdue = {(i,p) 
+            for (i,p),t in self.held_notes.items() 
+            if max_dur(i) < t and i not in no_steer}
+        # print(f'vipt {self.held_notes=}')
+        # print(f'vipt {note_on_map=}')
+        # print(f'vipt {max_duration=}')
+        # print(f'vipt {overdue=}')
+        # print(f'vipt {note_on_map=}')
+        # print(f'vipt {note_off_map=}')
+        # NOTE if note off is disallowed by min polyphony,
+        # it currently trumps max duration
+        # to fix this, we need to prioritize note on for instruments
+        # which are overdue but also at min polyphony
+        overdue_insts = {i_ for i_,p_ in overdue}
+        if len(overdue_insts & set(note_on_map)):
+            note_on_map = {i:note_on_map[i] for i in overdue_insts}
+
         no_off = all(len(ps)==0 for ps in note_off_map.values())
         # print(f'{no_on=} {no_off=}')
 
@@ -1098,26 +1134,44 @@ class Notochord(nn.Module):
             # if len(soonest_off):
             #     i_off,p_off = min(soonest_off, key=soonest_off.__getitem__)
             #     note_off_map = {i_off:[p_off]}
-            #     print('breaking constraint to allow note off')
+            #   print('breaking constraint to allow note off')
             # else:
             raise ValueError(f"""
                 no possible notes {note_on_map=} {note_off_map=}""")
 
         def note_map(e):
             try:
+                i = e.get('inst')
                 if e['vel'] > 0.5:
                     m = note_on_map
+                    # if len(overdue):
+                    #     if i is None:
+                    #         return {i_ for i_,p_ in overdue} & set(m)
                 else:
                     m = note_off_map
-                i = e.get('inst')
-                if i is not None:
-                    m = m[i]
-                return m
+                    if i is None:
+                        if len(overdue_insts & set(m)):
+                            return overdue_insts & set(m)
+                    else:
+                        overdue_pitches = {p_ for i_,p_ in overdue if i_==i} & set(m[i])
+                        if len(overdue_pitches): 
+                            return overdue_pitches
+
+                if i is None:
+                    return m
+                else:
+                    return m[i]
+                
             except Exception:
                 traceback.print_exc()
                 print(f'{e=} {note_off_map=} {note_on_map=}')
                 raise
             # print(f'{m=}')
+        # def note_map(e):
+        #     r = _note_map(e)
+        #     if len(r)==0:
+        #         raise ValueError
+        #     return r
                     
         w = 1 if steer_density is None else 2**(steer_density*2-1)
         

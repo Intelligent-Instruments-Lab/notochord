@@ -3,6 +3,7 @@ import torch
 from torch import nn
 import torch.distributions as D
 import torch.nn.functional as F
+from numbers import Number
 
 def reweight_quantile(probs, min_q=0, max_q=1):
     """
@@ -87,7 +88,7 @@ def categorical_sample(
 
 
 class CensoredMixtureLogistic(nn.Module):
-    def __init__(self, n, res=1e-2, lo='-inf', hi='inf', 
+    def __init__(self, n, res=1e-2, lo:Number|str='-inf', hi:Number|str='inf', 
             sharp_bounds=(1e-4,2e3), init=None):
         super().__init__()
         self.n = n
