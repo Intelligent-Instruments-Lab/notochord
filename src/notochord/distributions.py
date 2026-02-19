@@ -115,7 +115,7 @@ class CensoredMixtureLogistic(nn.Module):
         return self.n*3
 
     def get_params(self, h):
-        assert h.shape[-1] == self.n_params
+        assert h.shape[-1] == self.n_params, f'{h.shape=} {self.n_params=}'
         h = h+self.bias
         # get parameters from unconstrained hidden state:
         logit_pi, loc, log_s = torch.chunk(h, 3, -1)

@@ -22,6 +22,7 @@ from .rnn import GenericRNN
 from .distributions import CensoredMixtureLogistic, categorical_sample
 
 from .util import arg_to_set, download_url, argsort
+from .event import *
 
 class NoPossibleEvents(Exception):
     pass
@@ -343,6 +344,21 @@ class Notochord(nn.Module):
             self.time_emb,
             self.vel_emb
         )
+    
+    def embedding(self, m:str):
+        if m=='i': return self.instrument_emb
+        elif m=='p': return self.pitch_emb
+        elif m=='t': return self.time_emb
+        elif m=='v': return self.vel_emb
+        else: raise ValueError
+
+    def projection(self, m:str):
+        if m=='i': return self.projections[0]
+        elif m=='p': return self.projections[1]
+        elif m=='t': return self.projections[2]
+        elif m=='v': return self.projections[3]
+        else: raise ValueError
+
         
     def forward(self, instruments, pitches, times, velocities, ends,
             validation=False, ar_mask=None):
@@ -598,7 +614,7 @@ class Notochord(nn.Module):
                 result = sample(
                     params, whitelist=s.sample_values, **query.kw, **s.kw)
             else:
-                # weiighted ranges case
+                # weighted ranges case
                 assert all(isinstance(r, Range) for r in query.cases), query.cases
                 if len(query.cases) > 1:
                     probs = [
@@ -705,6 +721,295 @@ class Notochord(nn.Module):
             )
         )
         return self.deep_query(q)
+     
+    def init_event(self, cons:EventConstraints) -> NotochordEvent:
+        """
+        create Support based on held notes and user-supplied note map, 
+        as well as global time and velocity constraints
+        """
+        event = NotochordEvent()
+        held_map = self.held_map()
+
+        # get default note_on_map (anything)
+        if cons.note_on_map is None:
+            note_on_map = copy.copy(self._default_note_map)
+        else:
+            note_on_map = copy.deepcopy(cons.note_on_map)
+        # exclude held notes for note on
+        for i in held_map:
+            if i in note_on_map:
+                note_on_map[i] = set(note_on_map[i]) - held_map[i]
+
+        # note offs can be any from the note_on instruments by default
+        # but users can also supply this themselves
+        if cons.note_off_map is None:
+            note_off_map = {
+                i: held_map[i] 
+                for i in note_on_map
+                if i in held_map}
+        else:
+            note_off_map = {
+                i: set(ps) & held_map[i]
+                for i,ps in cons.note_off_map.items()
+                if i in held_map}
+            
+        for i,ps in note_on_map.items():
+            if len(ps):
+                # print(f'init noteOn support for {ps}')
+                event.support.add(SupportAtom(
+                    inst={i}, 
+                    pitch=set(ps), 
+                    time=SupportRange(cons.min_time),
+                    vel=SupportRange(max(0.5, cons.min_vel or 0), cons.max_vel)
+                    ))
+                   
+        for i,ps in note_off_map.items():
+            if len(ps):
+                # print(f'init noteOff support for {ps}')
+                event.support.add(SupportAtom(
+                    inst={i}, 
+                    pitch=set(ps), 
+                    time=SupportRange(cons.min_time),
+                    vel=SupportRange(hi=0.5)
+                    ))
+            
+        # make max interevent time a soft constraint
+        event.support.penalize_later(
+            cons.max_time, 
+            cons.penalty[Constraint.MAX_TIME], 
+            Constraint.MAX_TIME)
+        
+        return event
+          
+    def constrain_dur(self, 
+            event:NotochordEvent, 
+            cons:EventConstraints, 
+            external:Collection[int]
+        ):
+        """
+        """
+        max_dur = get_from_scalar_or_dict(cons.max_duration, torch.inf)
+        min_dur = get_from_scalar_or_dict(cons.min_duration, 0)
+
+        # hard:
+        # if any notes are >= max dur, they must have immediate noteOff
+        #     sampling can be skipped
+        latest_event = cons.max_time or float('inf')
+        for (i,p),t in self.held_notes.items():
+            # don't try to end externally controlled notes
+            if i in external: continue
+            delta = max_dur(i) - t
+            latest_event = min(latest_event, delta)
+            if delta <= max(cons.min_time, 10e-3):# and i not in no_steer:
+                event.set('i', i)
+                event.set('p', p)
+                event.set('v', 0)
+                event.set('t', cons.min_time)
+                print(f'ending long note with {event=}')
+                return
+        #     dur/poly interaction:
+        #     if the instrument is <= min poly (and has available pitches), it must instead have immediate *noteOn* (so old note can then end)
+        #     it would be simpler to just prioritize the max dur here, and let constrain_poly deal with starting a new note immediately, although that would not guarantee legato playing, which might affect synth behavior?
+        
+        # TODO: exclude external instruments from soft constraints?
+
+        # soft:
+        # whatever note must end soonest (max dur) is the time of latest possible event, for all atoms -- split atoms on time and penalize late
+        # print(f'clipping max time to {latest_event=} while {cons.min_time=}')
+        event.support.penalize_later(
+            latest_event, 
+            cons.penalty[Constraint.MAX_DUR], 
+            Constraint.MAX_DUR)
+
+        # penalize noteOffs which violate min dur for held notes
+        for (i,p),t in self.held_notes.items():
+            delta = min_dur(i) - t
+            if delta > 10e-3:
+                # each atom gets i,p pulled out, time clipped
+                # because these are held notes, we know v is already good
+                # also we know i is separated from init_event
+                # if we do it like this complexity is held notes * atoms...?
+                # print(f'clipping min time for {i=} {p=} to {delta}')
+                event.support.penalize_earlier_noteoff(
+                    delta, penalty=cons.penalty[Constraint.MIN_DUR], 
+                    pitch=p, inst=i)
+
+
+    def constrain_poly(self, 
+            event:NotochordEvent, 
+            cons:EventConstraints, 
+            external:Collection[int]
+        ):
+        """
+        apply polyphony constraints to the Support.
+
+        hard:
+        - any instruments > max poly must have NoteOff immediately.
+            pitch must still be sampled
+        - any instruments < min poly must have NoteOn immediately.
+            pitch and velocity must still be sampled
+
+        soft:
+        - any instruments == min poly, penalize NoteOff
+        - any instruments == max poly, penalize NoteOn
+        """
+        max_poly = get_from_scalar_or_dict(cons.max_polyphony, torch.inf)
+        min_poly = get_from_scalar_or_dict(cons.min_polyphony, 0)
+
+        poly = defaultdict(int)
+        for (i,_) in self.held_notes:
+            poly[i] += 1
+        insts = event.support.marginal_inst()
+
+        for i in insts:
+            if i not in external and poly[i] > max_poly(i):
+                event.set('i', i)
+                event.set('t', cons.min_time)
+                event.set('v', 0)
+                print(f'ending because over polyphony with {event=}')
+                return
+
+        for i in insts:
+            if i not in external and poly[i] < min_poly(i):
+                event.set('i', i)
+                event.set('t', cons.min_time)
+                event.support.remove_off()
+                print(f'starting beceause under polyphony with {event=}')
+
+                return
+
+        # TODO: should exclude external instruments here?
+        for i in insts:
+            if poly[i] >= max_poly(i):
+                event.support.penalize_on(
+                    inst=i, penalty=cons.penalty[Constraint.MAX_POLY])
+            if poly[i] <= min_poly(i):
+                event.support.penalize_off(
+                    inst=i, penalty=cons.penalty[Constraint.MIN_POLY])
+
+    
+    def _sample(self, 
+            modality:str,
+            ctx:torch.Tensor, 
+            event:NotochordEvent, 
+            steer:EventSteering,
+            external:Collection[int]
+        ):
+        params = self.projection(modality)(ctx.tanh())
+
+        no_steer = (
+            event.inst is not None 
+            and event.inst in external)
+        tqp = None if no_steer else steer.truncate_quantile_pitch 
+        tqv = None if no_steer else steer.truncate_quantile_vel 
+        tqt = None if no_steer else steer.truncate_quantile_time 
+
+        if modality=='i':
+            # TODO: apply instrument weights
+            return categorical_sample(
+                params, 
+                whitelist=event.support.marginal_inst(),
+                )
+        elif modality=='p':
+            tqp = steer.truncate_quantile_pitch if no_steer else None
+            return categorical_sample(
+                params, 
+                whitelist=event.support.marginal_pitch(),
+                top_p=steer.pitch_temp,
+                truncate_quantile=tqp
+                )
+        elif modality=='t':
+            return self.time_dist.sample(
+                params,
+                truncate=event.support.marginal_time().bounds(),
+                truncate_quantile=tqt,
+                weight_top_p=steer.rhythm_temp,
+                component_temp=steer.timing_temp,
+            )
+        elif modality=='v':
+            # TODO: steer_density
+            return self.vel_dist.sample(
+                params,
+                truncate=event.support.marginal_vel().bounds(),
+                truncate_quantile=tqv
+            ).round()
+        else:
+            raise ValueError
+
+    def query_neo(self, 
+            cons:EventConstraints, 
+            steer:EventSteering, 
+            external:Collection[int],
+            order='vtip'
+        ):
+        """
+        """
+        event = self.init_event(cons)
+        event.autoset()
+        if event.is_complete(): 
+            return event
+        # print('after init: ', event.support)
+        
+        self.constrain_dur(event, cons, external)
+        event.autoset()
+        if event.is_complete(): 
+            return event
+        # print('after dur: ', event.support)
+        
+        self.constrain_poly(event, cons, external)
+        event.autoset()
+
+        if event.support.empty():
+            raise NoPossibleEvents
+
+        # enforce constraints, but let them break according to penalty
+        # scores if all can't be satisfied
+        # print(f'{self.held_notes=}')
+        event.support.stratify()
+        event.autoset()
+
+        # TODO: do we need to re-stratify after each sample?
+        # sampling can't add any penalty
+        # it also can't change the stratum
+        # whatever atom is sample from *must* remain valid, right?
+
+        processed = ''
+        def next_modality():
+            fixed, unfixed = '', ''
+            for m in order:
+                if m not in processed:
+                    if event.modality(m) is None:
+                        unfixed += m
+                    else:
+                        fixed += m
+            return (fixed + unfixed)[0]
+
+        with torch.inference_mode():
+            if self.h_query is None:
+                self.h_query = self.h_proj(self.h)
+            ctx = self.h_query
+
+            while not event.is_complete():
+                m = next_modality()
+                processed += m
+                # print(f'{m=} {order=}')
+                value = event.modality(m)
+
+                if value is None:
+                    # sample next modality
+                    value = self._sample(m, ctx, event, steer, external)
+                    # print(f'set {m=} {value=}')
+                    event.set(m, value.item())
+                    event.autoset()
+                
+                if not isinstance(value, torch.Tensor):
+                    value = torch.tensor([[value]])
+                    
+                # embed
+                ctx = ctx + self.embedding(m)(value)
+
+        # print(f'{event=}')
+        return event
 
     # TODO: should be possible to constrain duration per (i,p) pair,
     # not just per instrument?
@@ -726,6 +1031,36 @@ class Notochord(nn.Module):
         inst_weights:Dict[int,float]|None=None,
         no_steer:List[int]|set=None,
         ):
+        event = self.query_neo(
+            EventConstraints(
+                note_on_map=note_on_map,
+                note_off_map=note_off_map,
+                min_time=min_time,
+                max_time=max_time,
+                min_vel=min_vel,
+                max_vel=max_vel,
+                min_polyphony=min_polyphony,
+                max_polyphony=max_polyphony,
+                min_duration=min_duration,
+                max_duration=max_duration),
+            EventSteering(
+                pitch_temp=pitch_temp,
+                rhythm_temp=rhythm_temp,
+                timing_temp=timing_temp,
+                truncate_quantile_time=truncate_quantile_time,
+                truncate_quantile_pitch=truncate_quantile_pitch,
+                truncate_quantile_vel=truncate_quantile_vel,
+                steer_density=steer_density,
+                inst_weights=inst_weights),
+            no_steer or set(),
+            'vtip'
+            )
+        return {
+            'time':event.time,
+            'vel':event.vel,
+            'pitch':event.pitch,
+            'inst':event.inst
+        }
         """
         Query in a fixed velocity->time->instrument->pitch order, sampling all
         modalities. Because velocity is sampled first, this query method can 
@@ -802,6 +1137,9 @@ class Notochord(nn.Module):
             note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
         )
 
+        # print(f'{note_on_map.keys()=}')
+        # print(f'{note_off_map.keys()=}')
+
         max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
         min_dur = get_from_scalar_or_dict(min_duration, 0)
 
@@ -814,6 +1152,27 @@ class Notochord(nn.Module):
         # only needed in the noteoff case: then check if time >= soonest_off
         # 1. for any pitch in each instrument
         # 2. which pitches for the sampled instrument
+
+
+        # when there is min polyphony,
+        # for voices which are at the min polyphony and have overdue events,
+        # they need a noteOn before they can have a noteOff,
+        # which constrains the latest noteOn.
+        # for now just force a noteOn
+        # min_polyphony = get_from_scalar_or_dict(min_polyphony)
+        # overdue_insts = set()
+        # for i,ps in self.held_map().items():
+        #    if len(ps) >= (min_polyphony(i) or 0):
+        #        for (i_,p),t in self.held_notes.items():
+        #             if i not in no_steer and i==i_ and t>= max_dur(i):
+        #                 overdue_insts.add(i)
+        # if len(overdue_insts):
+        #     note_on_map = {i:note_on_map[i] for i in overdue_insts if i in note_on_map}
+        #     note_off_map = {}
+
+        # print(f'{self.held_notes=}')
+        # print(f'->{note_on_map.keys()=}')
+        # print(f'->{note_off_map.keys()=}')
 
         # duration does not constrain the soonest noteOn;
         # the soonest possible noteOff is the next note which would end with 
@@ -971,6 +1330,36 @@ class Notochord(nn.Module):
         inst_weights:Dict[int,float]=None,
         no_steer:List[int]|set[int]=None,
         ):
+        event = self.query_neo(
+            EventConstraints(
+                note_on_map=note_on_map,
+                note_off_map=note_off_map,
+                min_time=min_time,
+                max_time=max_time,
+                min_vel=min_vel,
+                max_vel=max_vel,
+                min_polyphony=min_polyphony,
+                max_polyphony=max_polyphony,
+                min_duration=min_duration,
+                max_duration=max_duration),
+            EventSteering(
+                pitch_temp=pitch_temp,
+                rhythm_temp=rhythm_temp,
+                timing_temp=timing_temp,
+                truncate_quantile_time=truncate_quantile_time,
+                truncate_quantile_pitch=truncate_quantile_pitch,
+                truncate_quantile_vel=truncate_quantile_vel,
+                steer_density=steer_density,
+                inst_weights=inst_weights),
+            no_steer or set(),
+            'vipt'
+            )
+        return {
+            'time':event.time,
+            'vel':event.vel,
+            'pitch':event.pitch,
+            'inst':event.inst
+        }
         """
         Query in a fixed velocity->instrument->pitch->time order, sampling all
         modalities. Because velocity is sampled first, this query method can 

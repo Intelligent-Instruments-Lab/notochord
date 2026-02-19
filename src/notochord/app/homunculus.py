@@ -341,6 +341,7 @@ def main(
     if midi_control is not None:
         midi_control = MIDI(
             midi_control, midi_control, 
+            suppress_feedback=False,
             virtual_in_ports=0, virtual_out_ports=0)
 
     # backwards compat
@@ -358,7 +359,7 @@ def main(
 
     ### Textual UI
     tui = NotoTUI()
-    print = notochord.model.print = notochord.print = iipyper.print = tui.print
+    print = notochord.event.print = notochord.model.print = notochord.print = iipyper.print = tui.print
     ###
 
     if soundfont is None:
@@ -1135,14 +1136,15 @@ def main(
                 no_steer=mode_insts(('input','follow'), allow_muted=False),
             ))
         except NoPossibleEvents:
-            pass
+            print(f'no possible events')
             # print(f'stopping; no possible events')
             # pending.stopped = True
             # pending.clear()
+            pass
         except Exception:
             print(f'WARNING: query failed. {allowed_insts=} {note_on_map=}')
             print(f'{noto.held_notes=}')
-            print(f'{config=}')
+            # print(f'{config=}')
             traceback.print_exc(file=tui)
             # pending.clear()
 
