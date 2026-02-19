@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import TypeVar, Iterable
 import inspect
 import urllib.request
 
@@ -73,11 +74,12 @@ def deep_update(a, b):
             a[k] = b[k]
 
 
-def arg_to_set(x):
+ArgT = TypeVar('ArgT')
+def arg_to_set(x:None|ArgT|Iterable[ArgT]) -> set[ArgT]:
     """convert None to empty set, iterable to set, or scalar to set with one item"""
     if x is None:
         return set()
-    elif not hasattr(x, '__iter__'):
+    elif not isinstance(x, Iterable):
         return {x}
     else:
         return set(x)

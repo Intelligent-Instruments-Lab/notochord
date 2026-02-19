@@ -3,6 +3,8 @@ from enum import Enum, Flag, auto
 from collections import defaultdict
 from typing import MutableMapping, Collection
 
+import torch
+
 class Constraint(Flag):
     MIN_POLY = auto()
     MAX_POLY = auto()
@@ -20,14 +22,19 @@ _default_penalty = {
     Constraint.MAX_TIME:0.5,
 }
 
+# map from instrument to pitch set
+# ugly because Python invariant typing is annoying?
+# NoteMap = MutableMapping[int,Collection[int]] | dict[int,set[int]]
+NoteMap = dict[int,set[int]]|dict[int,Collection[int]]
+
 @dataclass
 class EventConstraints:
-    note_on_map:MutableMapping[int,Collection[int]]|None = None # inst:[pitch]
-    note_off_map:MutableMapping[int,Collection[int]]|None = None
-    min_time:float = float('-inf')
-    max_time:float = float('inf')
-    min_vel:float = float('-inf')
-    max_vel:float = float('inf')
+    note_on_map:NoteMap|None = None # inst:[pitch]
+    note_off_map:NoteMap|None = None
+    min_time:float = -torch.inf
+    max_time:float = torch.inf
+    min_vel:float = -torch.inf
+    max_vel:float = torch.inf
     min_polyphony:MutableMapping[int,int]|int = 0 
     max_polyphony:MutableMapping[int,int]|int = 128
     min_duration:MutableMapping[int,float]|float = 0 
@@ -35,6 +42,16 @@ class EventConstraints:
     # penalty specifies the relative importance of different constraints
     penalty:MutableMapping[Constraint,float] = field(
         default_factory=_default_penalty.copy)
+
+    def get(self, a:str, i:int):
+        field = getattr(self, a)
+        if isinstance(field, dict):
+            return field.get(i, EventConstraints.__dataclass_fields__[a].default)
+        else:
+            return field
+
+    # def helper(field, i, default):
+        # if isinstance(field, dict): return field.get(i, default)
 
 @dataclass
 class EventSteering:
@@ -237,7 +254,6 @@ class Support:
         return m
     
     
-
 @dataclass
 class NotochordEvent():
     inst: int|None = None

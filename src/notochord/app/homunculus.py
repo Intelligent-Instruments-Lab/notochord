@@ -93,9 +93,9 @@ def main(
     initial_query=None, # DEPRECATED, now inverse of `initial_stop`
     initial_stop=False, # if False, auto voices play immediately
 
-    midi_in:Optional[str]=None, # MIDI port for player input
-    midi_out:Optional[str]=None, # MIDI port for Notochord output
-    midi_control:Optional[str]=None, # MIDI port for note messages as controls
+    midi_in:str|None=None, # MIDI port for player input
+    midi_out:str|None=None, # MIDI port for Notochord output
+    midi_control:str|None=None, # MIDI port for note messages as controls
     thru=False, # copy player input to output
     send_pc=False, # send program change messages
     dump_midi=False, # print all incoming MIDI
@@ -332,17 +332,21 @@ def main(
     if osc_port is not None:
         osc = OSC(osc_host, osc_port)
     if midi_in is None and midi_control is not None:
-        midi_in = set(mido.get_input_names()) - set(midi_control.split(','))
+        midi_in = ','.join(
+            set(mido.get_input_names()) #type:ignore
+            - set(midi_control.split(',')))
     midi = MIDI(midi_in, midi_out, 
                 suppress_feedback=suppress_midi_feedback,
                 suppress_feedback_window=suppress_midi_feedback_window,
                 virtual_in_ports=midi_virtual_in_ports, 
                 virtual_out_ports=midi_virtual_out_ports)
     if midi_control is not None:
-        midi_control = MIDI(
+        midi_controller = MIDI(
             midi_control, midi_control, 
             suppress_feedback=False,
             virtual_in_ports=0, virtual_out_ports=0)
+    else:
+        midi_controller = None
 
     # backwards compat
     if initial_query is not None:
@@ -359,7 +363,8 @@ def main(
 
     ### Textual UI
     tui = NotoTUI()
-    print = notochord.event.print = notochord.model.print = notochord.print = iipyper.print = tui.print
+    # TODO: replace this with a proper logging solution
+    print = notochord.event.print = notochord.model.print = notochord.print = iipyper.print = tui.print # type:ignore
     ###
 
     if soundfont is None:
@@ -437,17 +442,20 @@ def main(
             global_config = toml_file.Config(str(default_preset_file))
         else:
             global_config = toml_file.Config(str(preset_file))
-        presets = global_config.get('preset', {})
-        control_meta = global_config.get('control', {})
-        action_meta = global_config.get('action', {})
+        presets = global_config.get('preset')
+        control_meta = global_config.get('control')
+        action_meta = global_config.get('action')
+        presets = {} if presets is None else presets
+        control_meta = {} if control_meta is None else control_meta
+        action_meta = {} if action_meta is None else action_meta
 
     except Exception:
         print('WARNING: failed to load presets from file')
         print(traceback.print_exc(file=tui))
         global_config = {}
         presets = {}
-        control_meta = []
-        action_meta = []
+        control_meta = {}
+        action_meta = {}
 
     # print(f'{global_config=}')
     # print(f'{presets=}')
@@ -471,7 +479,8 @@ def main(
         """default values for presets
         all fields should appear here, even if default is None
         """
-        d = global_config.get('default', {})
+        d = global_config.get('default')
+        d = {} if d is None else d
         # toml_file's get method also sets the value for some reason??
         # and it refuses to set a None value...
         def get(k, default):
@@ -617,6 +626,8 @@ def main(
     #     # TODO: check for follow cycles
     # validate_config()
 
+
+    # TODO: move this stuff into a HomunculusConfig class
     def mode_insts(t, allow_muted=True):
         if isinstance(t, str):
             t = t,
@@ -1252,16 +1263,16 @@ def main(
             v = action_cc[msg.control].get('value')
             dispatch_action(k, v)
 
-    if midi_control is not None:
+    if midi_controller is not None:
         # NOTE: hardcoded notochord study UI stuff
         if launchpad_control:
             preset_keys = range(112,120)
             momentary_keys = [120]
             for note in preset_keys:
-                midi_control.note_on(
+                midi_controller.note_on(
                     channel=0, note=note, velocity=0)
             
-        @midi_control.handle(type=('note_on'))
+        @midi_controller.handle(type=('note_on'))
         def _(msg, port):
             print('control note event', msg)
 
@@ -1283,13 +1294,13 @@ def main(
                     # if msg.velocity==0: return
                     if msg.velocity>0:
                         for note in preset_keys:
-                            midi_control.note_on(
+                            midi_controller.note_on(
                                 channel=0, note=note, velocity=0, port=port)
-                    midi_control.note_on(
+                    midi_controller.note_on(
                         channel=0, note=msg.note, 
                         velocity=70 if msg.velocity else 127, port=port)
                 if msg.note in momentary_keys:
-                    midi_control.note_on(
+                    midi_controller.note_on(
                         channel=0, note=msg.note, 
                         velocity=msg.velocity, port=port)
 
@@ -1998,6 +2009,7 @@ class NotoTUI(TUI):
     def set_preset(self, idx, name):
         if idx < NotoPresets.n_presets:
             node = self.query_one('#'+preset_id(idx))
+            assert isinstance(node, Button)
             node.label = str(idx) if name is None else name
         else:
             self.write(f'warning: more than {NotoPresets.n_presets} presets\n')
@@ -2008,6 +2020,10 @@ class NotoTUI(TUI):
         inst_node = self.query_one('#'+inst_id(chan))
         mode_node = self.query_one('#'+mode_id(chan))
         mute_node = self.query_one('#'+mute_id(chan))
+
+        assert isinstance(inst_node, Button)
+        assert isinstance(mode_node, Button)
+        assert isinstance(mute_node, Button)
 
         if cfg is None:
             inst_node.variant = 'default'

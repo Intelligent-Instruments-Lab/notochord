@@ -88,7 +88,7 @@ def categorical_sample(
 
 
 class CensoredMixtureLogistic(nn.Module):
-    def __init__(self, n, res=1e-2, lo:Number|str='-inf', hi:Number|str='inf', 
+    def __init__(self, n, res=1e-2, lo:float=-torch.inf, hi:float=torch.inf, 
             sharp_bounds=(1e-4,2e3), init=None):
         super().__init__()
         self.n = n

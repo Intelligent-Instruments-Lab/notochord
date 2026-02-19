@@ -1,5 +1,5 @@
 import math
-from typing import List, Tuple, Dict, Union, Any, Sequence, MutableMapping
+from typing import List, Tuple, Dict, Union, Any, Sequence, Mapping, MutableMapping, TypeVar
 from numbers import Number
 from collections import namedtuple, defaultdict
 from pathlib import Path
@@ -7,6 +7,7 @@ import hashlib
 import json
 import copy
 import traceback
+import time
 
 import mido
 from tqdm import tqdm
@@ -61,7 +62,12 @@ class Subset:
         self.sample_values = values if sample_values is None else sample_values
         self.kw = kw
 
-def get_from_scalar_or_dict(x, default=None):
+# def get_from_scalar_or_dict(x:Any, default:Any=None):
+ScalarT = TypeVar('ScalarT')
+def get_from_scalar_or_dict(
+        x:None|ScalarT|Mapping[int,ScalarT], default:ScalarT):
+    """
+    """
     if isinstance(x, dict):
         return lambda i: x.get(i, default)
     else:
@@ -149,7 +155,7 @@ class GLUMLP(nn.Module):
         self.net = nn.Sequential(*net)
 
         with torch.no_grad():
-            self.net[-1].weight.mul_(1e-2)
+            self.net[-1].weight.mul_(1e-2) # type: ignore
 
     def forward(self, x):
         return self.net(x)
@@ -192,7 +198,7 @@ class Notochord(nn.Module):
         self.vel_dist = CensoredMixtureLogistic(
             vel_components, 1.0,
             sharp_bounds=(1e-3,128),
-            lo=0, hi=127, init='velocity')
+            lo=0., hi=127., init='velocity')
         
         # embeddings for inputs
         self.instrument_emb = nn.Embedding(self.instrument_domain, emb_size)
@@ -241,7 +247,7 @@ class Notochord(nn.Module):
 
         with torch.no_grad():
             for p in self.projections:
-                p.net[-1].weight.mul_(1e-2)
+                p.net[-1].weight.mul_(1e-2) # type: ignore
             self.end_proj.weight.mul(1e-2)
 
         # persistent RNN state for inference
@@ -253,8 +259,11 @@ class Notochord(nn.Module):
         self.h = None
         self.h_query = None
 
-        self._default_note_map = {
-            i:range(128) for i in range(1,self.instrument_domain)}      
+    def default_note_map(self):
+        return {
+            i:set(range(128)) 
+            for i in range(1,self.instrument_domain)
+            }      
 
     def cell_state_names(self):
         return tuple(f'cell_state_{i}' for i in range(len(self.initial_state)))
@@ -271,8 +280,8 @@ class Notochord(nn.Module):
         return held_map
     
     def get_note_maps(self, 
-        note_on_map:MutableMapping[int,Sequence[int]]=None, 
-        note_off_map:MutableMapping[int,Sequence[int]]=None, 
+        note_on_map:NoteMap=None, 
+        note_off_map:NoteMap=None, 
         min_polyphony=None, max_polyphony=None,
         no_steer=None
         ) -> Tuple[Dict[int,List[int]], Dict[int,List[int]]]:
@@ -282,37 +291,27 @@ class Notochord(nn.Module):
 
         # get default note_on_map (anything)
         if note_on_map is None:
-            note_on_map = copy.copy(self._default_note_map)
+            note_on_map = self.default_note_map()
         else:
-            note_on_map = copy.deepcopy(note_on_map)
+            note_on_map = {i:set(ps) for i,ps in note_on_map.items()}
+        # exclude held notes for note on
+        for i in held_map:
+            if i in note_on_map:
+                note_on_map[i] = set(note_on_map[i]) - held_map[i]
 
         # note offs can be any from the note_on instruments by default
         # but users can also supply this themselves
+        # exclude non-held notes for note off
         if note_off_map is None:
             note_off_map = {
                 i: held_map[i] 
                 for i in note_on_map
                 if i in held_map}
         else:
-            note_off_map = copy.deepcopy(note_off_map)
-            
-        # exclude held notes for note on
-        for i in held_map:
-            if i in note_on_map:
-                note_on_map[i] = set(note_on_map[i]) - held_map[i]
-
-        # exclude non-held notes for note off
-        note_off_map = {
-            i: set(note_off_map[i]) & held_map[i]
-            for i in note_off_map
-            if i in held_map
-        }
-
-        # TODO: 
-        # allow breaking polyphony constraint when it results in no options?
-        # may not work to check here as more constraints applied downstream
-        # could track number/degree of constraint violations instead of 
-        # simply removing pitches -- later sample from the top stratum only
+            note_off_map = {
+                i:set(ps) & held_map[i] 
+                for i,ps in note_off_map.items()
+                if i in held_map}
 
         max_poly = get_from_scalar_or_dict(max_polyphony, torch.inf)
         min_poly = get_from_scalar_or_dict(min_polyphony, 0)
@@ -321,16 +320,16 @@ class Notochord(nn.Module):
         # prevent note on if polyphony exceeded
         for i in list(note_on_map):
             if i in no_steer: continue
-            if len(held_map.get(i, [])) >= max_poly(i):
+            if len(held_map.get(i, [])) >= max_poly(i): #type:ignore
                 note_on_map.pop(i)
 
         # prevent note off if below minimum polyphony
         for i in list(note_off_map):
             if i in no_steer: continue
-            if len(held_map[i]) <= min_poly(i):
+            if len(held_map[i]) <= min_poly(i): #type:ignore
                 note_off_map.pop(i)
 
-        return note_on_map, note_off_map
+        return note_on_map, note_off_map #type:ignore
 
     @property
     def cell_state(self):
@@ -380,10 +379,11 @@ class Notochord(nn.Module):
         self.checkpoint_path = None
 
         # embed data to input vectors
-        inst_emb = self.instrument_emb(instruments) # batch, time, emb_size
-        pitch_emb = self.pitch_emb(pitches) # batch, time, emb_size
-        time_emb = self.time_emb(times) # batch, time, emb_size
-        vel_emb = self.vel_emb(velocities) # batch, time, emb_size
+        # batch, time, emb_size
+        inst_emb:torch.Tensor = self.instrument_emb(instruments) 
+        pitch_emb:torch.Tensor = self.pitch_emb(pitches) 
+        time_emb:torch.Tensor = self.time_emb(times) 
+        vel_emb:torch.Tensor = self.vel_emb(velocities) 
 
         embs = (inst_emb, pitch_emb, time_emb, vel_emb)
 
@@ -391,7 +391,8 @@ class Notochord(nn.Module):
         x = sum(embs)
         ## broadcast initial state to batch size
         initial_state = tuple(
-            t.expand(self.rnn.num_layers, x.shape[0], -1).contiguous() # 1 x batch x hidden
+            # 1 x batch x hidden 
+            t.expand(self.rnn.num_layers, x.shape[0], -1).contiguous() # type: ignore
             for t in self.initial_state)
         h, _ = self.rnn(x, initial_state) #batch, time, hidden_size
 
@@ -485,7 +486,12 @@ class Notochord(nn.Module):
         i = self.first_anon_like(i)
         return range(i, i+n_anon)
     
-    def feed(self, inst:int, pitch:int, time:Number, vel:Number, **kw):
+    def feed(self, 
+            inst:int|torch.LongTensor, 
+            pitch:int|torch.LongTensor,
+            time:float|torch.FloatTensor, 
+            vel:float|torch.FloatTensor, 
+            **kw):
         """consume an event and advance hidden state
         
         Args:
@@ -612,7 +618,7 @@ class Notochord(nn.Module):
                 # TODO: handle case where user supplies cases and whitelist
                 s = query.cases[idx]
                 result = sample(
-                    params, whitelist=s.sample_values, **query.kw, **s.kw)
+                    params, whitelist=s.sample_values, **query.kw, **s.kw) #type:ignore
             else:
                 # weighted ranges case
                 assert all(isinstance(r, Range) for r in query.cases), query.cases
@@ -629,7 +635,7 @@ class Notochord(nn.Module):
                 # sample from range
                 # TODO: handle case where user supplies cases and truncate
                 result = sample(
-                    params, truncate=(r.sample_lo, r.sample_hi), **query.kw, **r.kw)
+                    params, truncate=(r.sample_lo, r.sample_hi), **query.kw, **r.kw) #type:ignore
 
 
         if not result.isfinite().all():
@@ -732,43 +738,37 @@ class Notochord(nn.Module):
 
         # get default note_on_map (anything)
         if cons.note_on_map is None:
-            note_on_map = copy.copy(self._default_note_map)
+            note_on_map = self.default_note_map()
         else:
-            note_on_map = copy.deepcopy(cons.note_on_map)
-        # exclude held notes for note on
-        for i in held_map:
-            if i in note_on_map:
-                note_on_map[i] = set(note_on_map[i]) - held_map[i]
+            note_on_map = {i: set(ps) for i,ps in cons.note_on_map.items()}
 
-        # note offs can be any from the note_on instruments by default
-        # but users can also supply this themselves
-        if cons.note_off_map is None:
-            note_off_map = {
-                i: held_map[i] 
-                for i in note_on_map
-                if i in held_map}
-        else:
-            note_off_map = {
-                i: set(ps) & held_map[i]
-                for i,ps in cons.note_off_map.items()
-                if i in held_map}
-            
         for i,ps in note_on_map.items():
+            ps = ps - held_map.get(i,set())
             if len(ps):
                 # print(f'init noteOn support for {ps}')
+                # exclude held notes for note on
                 event.support.add(SupportAtom(
                     inst={i}, 
-                    pitch=set(ps), 
+                    pitch=ps, 
                     time=SupportRange(cons.min_time),
                     vel=SupportRange(max(0.5, cons.min_vel or 0), cons.max_vel)
                     ))
                    
+
+        # note offs can be any from the note_on instruments by default
+        # but users can also supply this themselves
+        if cons.note_off_map is None:
+            note_off_map = {i: held_map.get(i, set()) for i in note_on_map}
+        else:
+            note_off_map = {i: set(ps) for i,ps in cons.note_off_map.items()}
+            
         for i,ps in note_off_map.items():
+            ps = ps & held_map.get(i, set())
             if len(ps):
                 # print(f'init noteOff support for {ps}')
                 event.support.add(SupportAtom(
                     inst={i}, 
-                    pitch=set(ps), 
+                    pitch=ps, 
                     time=SupportRange(cons.min_time),
                     vel=SupportRange(hi=0.5)
                     ))
@@ -788,17 +788,19 @@ class Notochord(nn.Module):
         ):
         """
         """
-        max_dur = get_from_scalar_or_dict(cons.max_duration, torch.inf)
-        min_dur = get_from_scalar_or_dict(cons.min_duration, 0)
+        # max_dur = get_from_scalar_or_dict(cons.max_duration, torch.inf)
+        # min_dur = get_from_scalar_or_dict(cons.min_duration, 0)
 
-        # hard:
+        # hard constraints:
+
         # if any notes are >= max dur, they must have immediate noteOff
         #     sampling can be skipped
         latest_event = cons.max_time or float('inf')
         for (i,p),t in self.held_notes.items():
             # don't try to end externally controlled notes
             if i in external: continue
-            delta = max_dur(i) - t
+            # delta = max_dur(i) - t
+            delta = cons.get('max_duration', i) - t
             latest_event = min(latest_event, delta)
             if delta <= max(cons.min_time, 10e-3):# and i not in no_steer:
                 event.set('i', i)
@@ -807,13 +809,18 @@ class Notochord(nn.Module):
                 event.set('t', cons.min_time)
                 print(f'ending long note with {event=}')
                 return
-        #     dur/poly interaction:
+            
+        # dur/poly interaction:
         #     if the instrument is <= min poly (and has available pitches), it must instead have immediate *noteOn* (so old note can then end)
-        #     it would be simpler to just prioritize the max dur here, and let constrain_poly deal with starting a new note immediately, although that would not guarantee legato playing, which might affect synth behavior?
+        #     it is simpler to just prioritize the max dur here, and let constrain_poly deal with starting a new note immediately, although that would not guarantee legato playing, which might affect synth behavior? # TODO
         
-        # TODO: exclude external instruments from soft constraints?
+        # soft constraints:
 
-        # soft:
+        # should we exclude external instruments from soft constraints?
+        # max dur: no, this is a constraint on all events; predictions of 
+        # external instruments must still respect it, otherwise it loses effect
+        # min dur: i think it doesn't matter much?
+
         # whatever note must end soonest (max dur) is the time of latest possible event, for all atoms -- split atoms on time and penalize late
         # print(f'clipping max time to {latest_event=} while {cons.min_time=}')
         event.support.penalize_later(
@@ -822,13 +829,13 @@ class Notochord(nn.Module):
             Constraint.MAX_DUR)
 
         # penalize noteOffs which violate min dur for held notes
+        # NOTE complexity is held notes * atoms...
+        # if atoms were indexed by note, it could be faster
         for (i,p),t in self.held_notes.items():
-            delta = min_dur(i) - t
+            if i in external: continue
+            # delta = min_dur(i) - t
+            delta = cons.get('min_duration', i) - t
             if delta > 10e-3:
-                # each atom gets i,p pulled out, time clipped
-                # because these are held notes, we know v is already good
-                # also we know i is separated from init_event
-                # if we do it like this complexity is held notes * atoms...?
                 # print(f'clipping min time for {i=} {p=} to {delta}')
                 event.support.penalize_earlier_noteoff(
                     delta, penalty=cons.penalty[Constraint.MIN_DUR], 
@@ -853,16 +860,20 @@ class Notochord(nn.Module):
         - any instruments == min poly, penalize NoteOff
         - any instruments == max poly, penalize NoteOn
         """
-        max_poly = get_from_scalar_or_dict(cons.max_polyphony, torch.inf)
-        min_poly = get_from_scalar_or_dict(cons.min_polyphony, 0)
+        # max_poly = get_from_scalar_or_dict(cons.max_polyphony, torch.inf)
+        # min_poly = get_from_scalar_or_dict(cons.min_polyphony, 0)
 
         poly = defaultdict(int)
         for (i,_) in self.held_notes:
             poly[i] += 1
-        insts = event.support.marginal_inst()
+
+        # TODO: external instruments must be excluded, otherwise it will
+        # get stuck waiting whenever external polyphony is outside constraints
+        insts = event.support.marginal_inst() - set(external)
 
         for i in insts:
-            if i not in external and poly[i] > max_poly(i):
+            # if poly[i] > max_poly(i):
+            if poly[i] > cons.get('max_polyphony',i):
                 event.set('i', i)
                 event.set('t', cons.min_time)
                 event.set('v', 0)
@@ -870,24 +881,24 @@ class Notochord(nn.Module):
                 return
 
         for i in insts:
-            if i not in external and poly[i] < min_poly(i):
+            # if poly[i] < min_poly(i):
+            if poly[i] < cons.get('min_polyphony', i):
                 event.set('i', i)
                 event.set('t', cons.min_time)
                 event.support.remove_off()
-                print(f'starting beceause under polyphony with {event=}')
-
+                print(f'starting because under polyphony with {event=}')
                 return
 
-        # TODO: should exclude external instruments here?
         for i in insts:
-            if poly[i] >= max_poly(i):
+            # if poly[i] >= max_poly(i):
+            if poly[i] >= cons.get('max_polyphony',i):
                 event.support.penalize_on(
                     inst=i, penalty=cons.penalty[Constraint.MAX_POLY])
-            if poly[i] <= min_poly(i):
+            # if poly[i] <= min_poly(i):
+            if poly[i] <= cons.get('min_polyphony',i):
                 event.support.penalize_off(
                     inst=i, penalty=cons.penalty[Constraint.MIN_POLY])
 
-    
     def _sample(self, 
             modality:str,
             ctx:torch.Tensor, 
@@ -944,6 +955,7 @@ class Notochord(nn.Module):
         ):
         """
         """
+        # t = time.time_ns()
         event = self.init_event(cons)
         event.autoset()
         if event.is_complete(): 
@@ -967,6 +979,9 @@ class Notochord(nn.Module):
         # print(f'{self.held_notes=}')
         event.support.stratify()
         event.autoset()
+
+        # cons_t = round((time.time_ns() - t)*1e-6)
+        # print(f'{cons_t=}ms')
 
         # TODO: do we need to re-stratify after each sample?
         # sampling can't add any penalty
@@ -1008,59 +1023,32 @@ class Notochord(nn.Module):
                 # embed
                 ctx = ctx + self.embedding(m)(value)
 
+        # query_t = round((time.time_ns() - t)*1e-6)
+        # print(f'{query_t=}ms')
+
         # print(f'{event=}')
         return event
 
     # TODO: should be possible to constrain duration per (i,p) pair,
     # not just per instrument?
     def query_vtip(self,
-        note_on_map:Dict[int,List[int]]|None=None, 
-        note_off_map:Dict[int,List[int]]|None=None,
+        note_on_map:dict[int,set[int]]|None=None, 
+        note_off_map:dict[int,set[int]]|None=None,
         min_time:float|None=None, max_time:float|None=None,
         min_vel:float|None=None, max_vel:float|None=None,
-        min_polyphony:Dict[int,int]|int|None=None, 
-        max_polyphony:Dict[int,int]|int|None=None,
-        min_duration:Dict[int,float]|float|None=None, 
-        max_duration:Dict[int,float]|float|None=None, 
+        min_polyphony:dict[int,int]|int|None=None, 
+        max_polyphony:dict[int,int]|int|None=None,
+        min_duration:dict[int,float]|float|None=None, 
+        max_duration:dict[int,float]|float|None=None, 
         pitch_temp:float|None=None,
         rhythm_temp:float|None=None, timing_temp:float|None=None,
         truncate_quantile_time:Tuple[float,float]|None=None,
         truncate_quantile_pitch:Tuple[float,float]|None=None,
         truncate_quantile_vel:Tuple[float,float]|None=None,
         steer_density:float|None=None,
-        inst_weights:Dict[int,float]|None=None,
-        no_steer:List[int]|set=None,
+        inst_weights:dict[int,float]|None=None,
+        no_steer:set[int]|set=None,
         ):
-        event = self.query_neo(
-            EventConstraints(
-                note_on_map=note_on_map,
-                note_off_map=note_off_map,
-                min_time=min_time,
-                max_time=max_time,
-                min_vel=min_vel,
-                max_vel=max_vel,
-                min_polyphony=min_polyphony,
-                max_polyphony=max_polyphony,
-                min_duration=min_duration,
-                max_duration=max_duration),
-            EventSteering(
-                pitch_temp=pitch_temp,
-                rhythm_temp=rhythm_temp,
-                timing_temp=timing_temp,
-                truncate_quantile_time=truncate_quantile_time,
-                truncate_quantile_pitch=truncate_quantile_pitch,
-                truncate_quantile_vel=truncate_quantile_vel,
-                steer_density=steer_density,
-                inst_weights=inst_weights),
-            no_steer or set(),
-            'vtip'
-            )
-        return {
-            'time':event.time,
-            'vel':event.vel,
-            'pitch':event.pitch,
-            'inst':event.inst
-        }
         """
         Query in a fixed velocity->time->instrument->pitch order, sampling all
         modalities. Because velocity is sampled first, this query method can 
@@ -1124,193 +1112,225 @@ class Notochord(nn.Module):
             no_steer: collection of instruments to exclude from effect of 
                 truncate_quantile_pitch.
         """
+        cons_kw = dict(
+            note_on_map=note_on_map,
+            note_off_map=note_off_map,
+            min_time=min_time,
+            max_time=max_time,
+            min_vel=min_vel,
+            max_vel=max_vel,
+            min_polyphony=min_polyphony,
+            max_polyphony=max_polyphony,
+            min_duration=min_duration,
+            max_duration=max_duration)
+        steer_kw = dict(
+            pitch_temp=pitch_temp,
+            rhythm_temp=rhythm_temp,
+            timing_temp=timing_temp,
+            truncate_quantile_time=truncate_quantile_time,
+            truncate_quantile_pitch=truncate_quantile_pitch,
+            truncate_quantile_vel=truncate_quantile_vel,
+            steer_density=steer_density,
+            inst_weights=inst_weights)
+        event = self.query_neo(
+            EventConstraints(**{k:v for k,v in cons_kw.items() if v is not None}), # type: ignore
+            EventSteering(**{k:v for k,v in steer_kw.items() if v is not None}), # type: ignore
+            no_steer or set(),
+            'vtip'
+        )
+        return {
+            'time':event.time,
+            'vel':event.vel,
+            'pitch':event.pitch,
+            'inst':event.inst
+        }
         # NOTE: have to add epsilon when comparing sampled times,
         # or else rounding error can cause discrepancy 
-        eps = 1e-5
-        min_time = min_time or 0
-        max_time = max_time or torch.inf
+        # eps = 1e-5
+        # min_time = min_time or 0
+        # max_time = max_time or torch.inf
 
-        inst_weights = inst_weights or {}
-        no_steer = no_steer or set()
+        # inst_weights = inst_weights or {}
+        # no_steer = no_steer or set()
 
-        note_on_map, note_off_map = self.get_note_maps(
-            note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
-        )
+        # note_on_map, note_off_map = self.get_note_maps(
+        #     note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
+        # )
 
-        # print(f'{note_on_map.keys()=}')
-        # print(f'{note_off_map.keys()=}')
+        # # print(f'{note_on_map.keys()=}')
+        # # print(f'{note_off_map.keys()=}')
 
-        max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
-        min_dur = get_from_scalar_or_dict(min_duration, 0)
+        # max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
+        # min_dur = get_from_scalar_or_dict(min_duration, 0)
 
-        # need to compute time constraints from polyphony and duration,
-        # given velocity but not inst/pitch
-        # polyphony shouldn't affect time except via note on/off maps
-        # soonest_off can just be reduced for purposes of truncating time
-        # but then need to compute the allowed instruments, and then pitches,
-        # given the sampled time, based on duration constraints
-        # only needed in the noteoff case: then check if time >= soonest_off
-        # 1. for any pitch in each instrument
-        # 2. which pitches for the sampled instrument
+        # # need to compute time constraints from polyphony and duration,
+        # # given velocity but not inst/pitch
+        # # polyphony shouldn't affect time except via note on/off maps
+        # # soonest_off can just be reduced for purposes of truncating time
+        # # but then need to compute the allowed instruments, and then pitches,
+        # # given the sampled time, based on duration constraints
+        # # only needed in the noteoff case: then check if time >= soonest_off
+        # # 1. for any pitch in each instrument
+        # # 2. which pitches for the sampled instrument
 
 
-        # when there is min polyphony,
-        # for voices which are at the min polyphony and have overdue events,
-        # they need a noteOn before they can have a noteOff,
-        # which constrains the latest noteOn.
-        # for now just force a noteOn
-        # min_polyphony = get_from_scalar_or_dict(min_polyphony)
-        # overdue_insts = set()
-        # for i,ps in self.held_map().items():
-        #    if len(ps) >= (min_polyphony(i) or 0):
-        #        for (i_,p),t in self.held_notes.items():
-        #             if i not in no_steer and i==i_ and t>= max_dur(i):
-        #                 overdue_insts.add(i)
-        # if len(overdue_insts):
-        #     note_on_map = {i:note_on_map[i] for i in overdue_insts if i in note_on_map}
-        #     note_off_map = {}
+        # # when there is min polyphony,
+        # # for voices which are at the min polyphony and have overdue events,
+        # # they need a noteOn before they can have a noteOff,
+        # # which constrains the latest noteOn.
+        # # for now just force a noteOn
+        # # min_polyphony = get_from_scalar_or_dict(min_polyphony)
+        # # overdue_insts = set()
+        # # for i,ps in self.held_map().items():
+        # #    if len(ps) >= (min_polyphony(i) or 0):
+        # #        for (i_,p),t in self.held_notes.items():
+        # #             if i not in no_steer and i==i_ and t>= max_dur(i):
+        # #                 overdue_insts.add(i)
+        # # if len(overdue_insts):
+        # #     note_on_map = {i:note_on_map[i] for i in overdue_insts if i in note_on_map}
+        # #     note_off_map = {}
 
-        # print(f'{self.held_notes=}')
-        # print(f'->{note_on_map.keys()=}')
-        # print(f'->{note_off_map.keys()=}')
+        # # print(f'{self.held_notes=}')
+        # # print(f'->{note_on_map.keys()=}')
+        # # print(f'->{note_off_map.keys()=}')
 
-        # duration does not constrain the soonest noteOn;
-        # the soonest possible noteOff is the next note which would end with 
-        # minimal duration (but no sooner than the global min_time)
-        # compute that soonest noteOff time for each possible noteOff:
+        # # duration does not constrain the soonest noteOn;
+        # # the soonest possible noteOff is the next note which would end with 
+        # # minimal duration (but no sooner than the global min_time)
+        # # compute that soonest noteOff time for each possible noteOff:
         
-        soonest_off = {
-            (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
-            for i,ps in note_off_map.items()
-            for p in ps}
-        # print(f'{soonest_off=}')
-        soonest_off_any = min(soonest_off.values(), default=0)
+        # soonest_off = {
+        #     (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
+        #     for i,ps in note_off_map.items()
+        #     for p in ps}
+        # # print(f'{soonest_off=}')
+        # soonest_off_any = min(soonest_off.values(), default=0)
         
-        # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
-        latest_off = torch.inf
-        for (i,p),t in self.held_notes.items():
-            latest_off = min(latest_off, max_dur(i) - t)
+        # # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
+        # latest_off = torch.inf
+        # for (i,p),t in self.held_notes.items():
+        #     latest_off = min(latest_off, max_dur(i) - t)
 
-        # in case where only note off is allowed 
-        # (likely due to max_polyphony or max_duration)
-        # min_duration and max_time can be unsatisfiable
-        # break the max_time constraint in that case
-        no_on = all(len(ps)==0 for ps in note_on_map.values())
-        if no_on:
-            if soonest_off_any > max_time:
-                max_time = soonest_off_any + eps
-                print(f'breaking max_time constraint -> {max_time}s')
+        # # in case where only note off is allowed 
+        # # (likely due to max_polyphony or max_duration)
+        # # min_duration and max_time can be unsatisfiable
+        # # break the max_time constraint in that case
+        # no_on = all(len(ps)==0 for ps in note_on_map.values())
+        # if no_on:
+        #     if soonest_off_any > max_time:
+        #         max_time = soonest_off_any + eps
+        #         print(f'breaking max_time constraint -> {max_time}s')
         
-        # slip to accomodate global constraint
-        latest_event = max(min_time, min(latest_off, max_time))
+        # # slip to accomodate global constraint
+        # latest_event = max(min_time, min(latest_off, max_time))
 
-        # print(f'pre {note_off_map=}') ###DEBUG
+        # # print(f'pre {note_off_map=}') ###DEBUG
 
-        # remove impossible note offs
-        # (i.e. soonest possible note-off is after the latest possible event)
-        for i,ps in list(note_off_map.items()):
-            for p in list(ps):
-                if soonest_off[(i,p)] > latest_event:
-                    ps.remove(p)
-            if not len(ps):
-                note_off_map.pop(i)
-                continue
+        # # remove impossible note offs
+        # # (i.e. soonest possible note-off is after the latest possible event)
+        # for i,ps in list(note_off_map.items()):
+        #     for p in list(ps):
+        #         if soonest_off[(i,p)] > latest_event:
+        #             ps.remove(p)
+        #     if not len(ps):
+        #         note_off_map.pop(i)
+        #         continue
 
-        # print(f'post {note_off_map=}') ###DEBUG
-        no_off = all(len(ps)==0 for ps in note_off_map.values())
-        # print(f'{no_on=} {no_off=}')
+        # # print(f'post {note_off_map=}') ###DEBUG
+        # no_off = all(len(ps)==0 for ps in note_off_map.values())
+        # # print(f'{no_on=} {no_off=}')
 
-        if not no_off and latest_off<=min_time:
-            no_on = True
+        # if not no_off and latest_off<=min_time:
+        #     no_on = True
 
-        if no_on and no_off:
-            raise NoPossibleEvents(f"""
-                no possible notes {note_on_map=} {note_off_map=}""")
+        # if no_on and no_off:
+        #     raise NoPossibleEvents(f"""
+        #         no possible notes {note_on_map=} {note_off_map=}""")
 
-        def insts(e):
-            # here, any instrument with notes over duration
-            # should be prioritized;
-            # for note off, clearly, but also for note on in case 
-            # of a min polyphony constraint
-            overdue_insts = set()
-            for (i_,p_),t_ in self.held_notes.items():
-                if i_ not in no_steer and max_dur(i_) - t_ - e['time'] < 0:
-                    overdue_insts.add(i_)
-            if e['vel'] > 0.5:
-                overdue_insts &= set(note_on_map)
-                if len(overdue_insts):
-                    return overdue_insts
-                return note_on_map
-            else:
-                overdue_insts &= set(note_off_map)
-                if len(overdue_insts):
-                    return overdue_insts
-                ###
+        # def insts(e):
+        #     # here, any instrument with notes over duration
+        #     # should be prioritized;
+        #     # for note off, clearly, but also for note on in case 
+        #     # of a min polyphony constraint
+        #     overdue_insts = set()
+        #     for (i_,p_),t_ in self.held_notes.items():
+        #         if i_ not in no_steer and max_dur(i_) - t_ - e['time'] < 0:
+        #             overdue_insts.add(i_)
+        #     if e['vel'] > 0.5:
+        #         overdue_insts &= set(note_on_map)
+        #         if len(overdue_insts):
+        #             return overdue_insts
+        #         return note_on_map
+        #     else:
+        #         overdue_insts &= set(note_off_map)
+        #         if len(overdue_insts):
+        #             return overdue_insts
+        #         ###
                 
-                return {
-                    i for i,ps in note_off_map.items() if any(
-                        soonest_off[(i,p)] <= e['time']+eps for p in ps
-                    )}
+        #         return {
+        #             i for i,ps in note_off_map.items() if any(
+        #                 soonest_off[(i,p)] <= e['time']+eps for p in ps
+        #             )}
             
-        def pitches(e):
-            i = e['inst']
-            if e['vel'] > 0.5:
-                return note_on_map[i]
-            else:
-                # here, any notes over duration (as of sampled t) 
-                # should be prioritized to end
-                overdue_pitches = set()
-                for (i_,p_),t_ in self.held_notes.items():
-                    if i not in no_steer and i==i_ and max_dur(i) - t_ - e['time'] < 0:
-                        overdue_pitches.add(p_)
-                overdue_pitches &= set(note_off_map)
-                if len(overdue_pitches):
-                    return overdue_pitches
-                ###
+        # def pitches(e):
+        #     i = e['inst']
+        #     if e['vel'] > 0.5:
+        #         return note_on_map[i]
+        #     else:
+        #         # here, any notes over duration (as of sampled t) 
+        #         # should be prioritized to end
+        #         overdue_pitches = set()
+        #         for (i_,p_),t_ in self.held_notes.items():
+        #             if i not in no_steer and i==i_ and max_dur(i) - t_ - e['time'] < 0:
+        #                 overdue_pitches.add(p_)
+        #         overdue_pitches &= set(note_off_map)
+        #         if len(overdue_pitches):
+        #             return overdue_pitches
+        #         ###
                 
-                return {
-                    p for p in note_off_map[i] 
-                    if soonest_off[(i,p)] <= e['time']+eps}
+        #         return {
+        #             p for p in note_off_map[i] 
+        #             if soonest_off[(i,p)] <= e['time']+eps}
                     
-        w = 1 if steer_density is None else 2**(steer_density*2-1)
+        # w = 1 if steer_density is None else 2**(steer_density*2-1)
         
-        w_on = 0 if no_on else w
-        w_off = 0 if no_off else 1/w
+        # w_on = 0 if no_on else w
+        # w_off = 0 if no_off else 1/w
 
-        min_vel = max(0.5, 0 if min_vel is None else min_vel)
-        max_vel = torch.inf if max_vel is None else max_vel
+        # min_vel = max(0.5, 0 if min_vel is None else min_vel)
+        # max_vel = torch.inf if max_vel is None else max_vel
         
-        return self.deep_query(Query(
-            'vel', 
-            cases=(
-                Range(-torch.inf,0.5,w_off), 
-                Range(0.5,torch.inf,w_on,
-                    min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
-            then=lambda e: Query(
-                'time',       
-                truncate=(
-                    min_time if e['vel']>0 else soonest_off_any,
-                    latest_event
-                ),
-                truncate_quantile=truncate_quantile_time,
-                weight_top_p=rhythm_temp, 
-                component_temp=timing_temp,
-                then=lambda e: Query(
-                    'inst', 
-                    whitelist={
-                        i:inst_weights.get(i,1) if e['vel'] > 0 else 1 
-                        for i in insts(e)},
-                    then=lambda e: Query(
-                        'pitch', 
-                        whitelist=pitches(e),
-                        top_p=pitch_temp,
-                        truncate_quantile=(
-                            None if (
-                                e['vel']==0 
-                                or self.is_drum(e['inst']) 
-                                or e['inst'] in no_steer)
-                            else truncate_quantile_pitch),
-        )))))
+        # return self.deep_query(Query(
+        #     'vel', 
+        #     cases=(
+        #         Range(-torch.inf,0.5,w_off), 
+        #         Range(0.5,torch.inf,w_on,
+        #             min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
+        #     then=lambda e: Query(
+        #         'time',       
+        #         truncate=(
+        #             min_time if e['vel']>0 else soonest_off_any,
+        #             latest_event
+        #         ),
+        #         truncate_quantile=truncate_quantile_time,
+        #         weight_top_p=rhythm_temp, 
+        #         component_temp=timing_temp,
+        #         then=lambda e: Query(
+        #             'inst', 
+        #             whitelist={
+        #                 i:inst_weights.get(i,1) if e['vel'] > 0 else 1 
+        #                 for i in insts(e)},
+        #             then=lambda e: Query(
+        #                 'pitch', 
+        #                 whitelist=pitches(e),
+        #                 top_p=pitch_temp,
+        #                 truncate_quantile=(
+        #                     None if (
+        #                         e['vel']==0 
+        #                         or self.is_drum(e['inst']) 
+        #                         or e['inst'] in no_steer)
+        #                     else truncate_quantile_pitch),
+        # )))))
     
     def query_vipt(self,
         note_on_map:Dict[int,List[int]]|None=None, 
@@ -1330,36 +1350,6 @@ class Notochord(nn.Module):
         inst_weights:Dict[int,float]=None,
         no_steer:List[int]|set[int]=None,
         ):
-        event = self.query_neo(
-            EventConstraints(
-                note_on_map=note_on_map,
-                note_off_map=note_off_map,
-                min_time=min_time,
-                max_time=max_time,
-                min_vel=min_vel,
-                max_vel=max_vel,
-                min_polyphony=min_polyphony,
-                max_polyphony=max_polyphony,
-                min_duration=min_duration,
-                max_duration=max_duration),
-            EventSteering(
-                pitch_temp=pitch_temp,
-                rhythm_temp=rhythm_temp,
-                timing_temp=timing_temp,
-                truncate_quantile_time=truncate_quantile_time,
-                truncate_quantile_pitch=truncate_quantile_pitch,
-                truncate_quantile_vel=truncate_quantile_vel,
-                steer_density=steer_density,
-                inst_weights=inst_weights),
-            no_steer or set(),
-            'vipt'
-            )
-        return {
-            'time':event.time,
-            'vel':event.vel,
-            'pitch':event.pitch,
-            'inst':event.inst
-        }
         """
         Query in a fixed velocity->instrument->pitch->time order, sampling all
         modalities. Because velocity is sampled first, this query method can 
@@ -1423,189 +1413,221 @@ class Notochord(nn.Module):
             no_steer: collection of instruments to exclude from effect of 
                 truncate_quantile_pitch and truncate_quantile_time.
         """
-        # NOTE: weird behavior can result when contraints are applied to 
-        # an input voice.
-        # but i don't think it would work well to completely ignore constraints on
-        # inputs; that might also lead to overprediction of inputs?
-        eps = 1e-5
-        min_time = min_time or 0
-        max_time = max_time or torch.inf
-
-        inst_weights = inst_weights or {}
-        no_steer = no_steer or set()
-
-        note_on_map, note_off_map = self.get_note_maps(
-            note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
+        cons_kw = dict(
+            note_on_map=note_on_map,
+            note_off_map=note_off_map,
+            min_time=min_time,
+            max_time=max_time,
+            min_vel=min_vel,
+            max_vel=max_vel,
+            min_polyphony=min_polyphony,
+            max_polyphony=max_polyphony,
+            min_duration=min_duration,
+            max_duration=max_duration)
+        steer_kw = dict(
+            pitch_temp=pitch_temp,
+            rhythm_temp=rhythm_temp,
+            timing_temp=timing_temp,
+            truncate_quantile_time=truncate_quantile_time,
+            truncate_quantile_pitch=truncate_quantile_pitch,
+            truncate_quantile_vel=truncate_quantile_vel,
+            steer_density=steer_density,
+            inst_weights=inst_weights)
+        event = self.query_neo(
+            EventConstraints(**{k:v for k,v in cons_kw.items() if v is not None}), # type: ignore
+            EventSteering(**{k:v for k,v in steer_kw.items() if v is not None}), # type: ignore
+            no_steer or set(),
+            'vipt'
         )
+        return {
+            'time':event.time,
+            'vel':event.vel,
+            'pitch':event.pitch,
+            'inst':event.inst
+        }
+        # # NOTE: weird behavior can result when contraints are applied to 
+        # # an input voice.
+        # # but i don't think it would work well to completely ignore constraints on
+        # # inputs; that might also lead to overprediction of inputs?
+        # eps = 1e-5
+        # min_time = min_time or 0
+        # max_time = max_time or torch.inf
 
-        max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
-        min_dur = get_from_scalar_or_dict(min_duration, 0)
+        # inst_weights = inst_weights or {}
+        # no_steer = no_steer or set()
 
-        # duration does not constrain the soonest noteOn;
-        # the soonest possible noteOff is the next note which would end with 
-        # minimal duration (but no sooner than the global min_time)
-        # compute that soonest noteOff time for each possible noteOff:
-        soonest_off = {
-            (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
-            for i,ps in note_off_map.items()
-            for p in ps}
-        # print(f'{soonest_off=}')
+        # note_on_map, note_off_map = self.get_note_maps(
+        #     note_on_map, note_off_map, min_polyphony, max_polyphony, no_steer
+        # )
 
-        # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
-        latest_off = torch.inf
-        for (i,p),t in self.held_notes.items():
-            latest_off = min(latest_off, max_dur(i) - t)
+        # max_dur = get_from_scalar_or_dict(max_duration, torch.inf)
+        # min_dur = get_from_scalar_or_dict(min_duration, 0)
 
-        # in case where only note off is allowed (likely due to max_polyphony)
-        # min_duration and max_time can be unsatisfiable
-        # break the max_time constraint in that case
-        no_on = all(len(ps)==0 for ps in note_on_map.values())
-        if no_on:
-            soonest_off_any = min(soonest_off.values(), default=0)
-            if soonest_off_any > max_time:
-                max_time = soonest_off_any + eps
-                print(f'breaking max_time constraint -> {max_time}s')
+        # # duration does not constrain the soonest noteOn;
+        # # the soonest possible noteOff is the next note which would end with 
+        # # minimal duration (but no sooner than the global min_time)
+        # # compute that soonest noteOff time for each possible noteOff:
+        # soonest_off = {
+        #     (i,p):max(min_time, min_dur(i) - self.held_notes[(i,p)]) 
+        #     for i,ps in note_off_map.items()
+        #     for p in ps}
+        # # print(f'{soonest_off=}')
+
+        # # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
+        # latest_off = torch.inf
+        # for (i,p),t in self.held_notes.items():
+        #     latest_off = min(latest_off, max_dur(i) - t)
+
+        # # in case where only note off is allowed (likely due to max_polyphony)
+        # # min_duration and max_time can be unsatisfiable
+        # # break the max_time constraint in that case
+        # no_on = all(len(ps)==0 for ps in note_on_map.values())
+        # if no_on:
+        #     soonest_off_any = min(soonest_off.values(), default=0)
+        #     if soonest_off_any > max_time:
+        #         max_time = soonest_off_any + eps
+        #         print(f'breaking max_time constraint -> {max_time}s')
         
-        # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
-        # or the global max interevent time, if shorter
-        latest_event = max_time
-        for (i,p),t in self.held_notes.items():
-            latest_event = min(latest_event, max_dur(i) - t)
-        # slip to accomodate global constraint
-        latest_event = max(min_time, latest_event)
+        # # latest possible event is minimum max remaining duration over all held notes (i.e. the soonest noteOff ending a max-duration note)
+        # # or the global max interevent time, if shorter
+        # latest_event = max_time
+        # for (i,p),t in self.held_notes.items():
+        #     latest_event = min(latest_event, max_dur(i) - t)
+        # # slip to accomodate global constraint
+        # latest_event = max(min_time, latest_event)
 
-        # if latest_event is <= min_time, probably means one of two things:
-        # 1. some notes are already over time and should be prioritized to end
-        # we don't want noteoffs which would prevent ending a different note on time -- except in the case where the soonest noteoff is already late according to global min_time; any such noteOff is valid
-        # since both latest_event and soonest_off are clipped to min_time --
-        # we can exclude noteOffs when soonest_off > latest_event,
-        # but allow soonest_off==latest_event
-        # 2. polyphony+duration contraints contradict max_time
-        # i.e. solo monophonic instrument has min_duration = 5, 
-        # but max_time is 3 -- nothing to do after 3 seconds
-        # ought to break the max_time constraint in this case;
-        # can set max_time = max(max_time, min(remaining min duration of held notes))
+        # # if latest_event is <= min_time, probably means one of two things:
+        # # 1. some notes are already over time and should be prioritized to end
+        # # we don't want noteoffs which would prevent ending a different note on time -- except in the case where the soonest noteoff is already late according to global min_time; any such noteOff is valid
+        # # since both latest_event and soonest_off are clipped to min_time --
+        # # we can exclude noteOffs when soonest_off > latest_event,
+        # # but allow soonest_off==latest_event
+        # # 2. polyphony+duration contraints contradict max_time
+        # # i.e. solo monophonic instrument has min_duration = 5, 
+        # # but max_time is 3 -- nothing to do after 3 seconds
+        # # ought to break the max_time constraint in this case;
+        # # can set max_time = max(max_time, min(remaining min duration of held notes))
 
-        # remove impossible note offs
-        # (i.e. soonest possible note-off is after the latest possible event)
-        for i,ps in list(note_off_map.items()):
-            for p in list(ps):
-                if soonest_off[(i,p)] > latest_event:
-                    ps.remove(p)
-            if not len(ps):
-                note_off_map.pop(i)
-                continue
+        # # remove impossible note offs
+        # # (i.e. soonest possible note-off is after the latest possible event)
+        # for i,ps in list(note_off_map.items()):
+        #     for p in list(ps):
+        #         if soonest_off[(i,p)] > latest_event:
+        #             ps.remove(p)
+        #     if not len(ps):
+        #         note_off_map.pop(i)
+        #         continue
 
-        overdue = {(i,p) 
-            for (i,p),t in self.held_notes.items() 
-            if max_dur(i) < t and i not in no_steer}
-        # print(f'vipt {self.held_notes=}')
-        # print(f'vipt {note_on_map=}')
-        # print(f'vipt {max_duration=}')
-        # print(f'vipt {overdue=}')
-        # print(f'vipt {note_on_map=}')
-        # print(f'vipt {note_off_map=}')
-        # NOTE if note off is disallowed by min polyphony,
-        # it currently trumps max duration
-        # to fix this, we need to prioritize note on for instruments
-        # which are overdue but also at min polyphony
-        overdue_insts = {i_ for i_,p_ in overdue}
-        if len(overdue_insts & set(note_on_map)):
-            note_on_map = {i:note_on_map[i] for i in overdue_insts}
+        # overdue = {(i,p) 
+        #     for (i,p),t in self.held_notes.items() 
+        #     if max_dur(i) < t and i not in no_steer}
+        # # print(f'vipt {self.held_notes=}')
+        # # print(f'vipt {note_on_map=}')
+        # # print(f'vipt {max_duration=}')
+        # # print(f'vipt {overdue=}')
+        # # print(f'vipt {note_on_map=}')
+        # # print(f'vipt {note_off_map=}')
+        # # NOTE if note off is disallowed by min polyphony,
+        # # it currently trumps max duration
+        # # to fix this, we need to prioritize note on for instruments
+        # # which are overdue but also at min polyphony
+        # overdue_insts = {i_ for i_,p_ in overdue}
+        # if len(overdue_insts & set(note_on_map)):
+        #     note_on_map = {i:note_on_map[i] for i in overdue_insts}
 
-        no_off = all(len(ps)==0 for ps in note_off_map.values())
-        # print(f'{no_on=} {no_off=}')
+        # no_off = all(len(ps)==0 for ps in note_off_map.values())
+        # # print(f'{no_on=} {no_off=}')
 
-        if not no_off and latest_off<=min_time:
-            no_on = True
+        # if not no_off and latest_off<=min_time:
+        #     no_on = True
 
-        if no_on and no_off:
-            # if len(soonest_off):
-            #     i_off,p_off = min(soonest_off, key=soonest_off.__getitem__)
-            #     note_off_map = {i_off:[p_off]}
-            #   print('breaking constraint to allow note off')
-            # else:
-            raise ValueError(f"""
-                no possible notes {note_on_map=} {note_off_map=}""")
+        # if no_on and no_off:
+        #     # if len(soonest_off):
+        #     #     i_off,p_off = min(soonest_off, key=soonest_off.__getitem__)
+        #     #     note_off_map = {i_off:[p_off]}
+        #     #   print('breaking constraint to allow note off')
+        #     # else:
+        #     raise ValueError(f"""
+        #         no possible notes {note_on_map=} {note_off_map=}""")
 
-        def note_map(e):
-            try:
-                i = e.get('inst')
-                if e['vel'] > 0.5:
-                    m = note_on_map
-                    # if len(overdue):
-                    #     if i is None:
-                    #         return {i_ for i_,p_ in overdue} & set(m)
-                else:
-                    m = note_off_map
-                    if i is None:
-                        if len(overdue_insts & set(m)):
-                            return overdue_insts & set(m)
-                    else:
-                        overdue_pitches = {p_ for i_,p_ in overdue if i_==i} & set(m[i])
-                        if len(overdue_pitches): 
-                            return overdue_pitches
-
-                if i is None:
-                    return m
-                else:
-                    return m[i]
-                
-            except Exception:
-                traceback.print_exc()
-                print(f'{e=} {note_off_map=} {note_on_map=}')
-                raise
-            # print(f'{m=}')
         # def note_map(e):
-        #     r = _note_map(e)
-        #     if len(r)==0:
-        #         raise ValueError
-        #     return r
+        #     try:
+        #         i = e.get('inst')
+        #         if e['vel'] > 0.5:
+        #             m = note_on_map
+        #             # if len(overdue):
+        #             #     if i is None:
+        #             #         return {i_ for i_,p_ in overdue} & set(m)
+        #         else:
+        #             m = note_off_map
+        #             if i is None:
+        #                 if len(overdue_insts & set(m)):
+        #                     return overdue_insts & set(m)
+        #             else:
+        #                 overdue_pitches = {p_ for i_,p_ in overdue if i_==i} & set(m[i])
+        #                 if len(overdue_pitches): 
+        #                     return overdue_pitches
+
+        #         if i is None:
+        #             return m
+        #         else:
+        #             return m[i]
+                
+        #     except Exception:
+        #         traceback.print_exc()
+        #         print(f'{e=} {note_off_map=} {note_on_map=}')
+        #         raise
+        #     # print(f'{m=}')
+        # # def note_map(e):
+        # #     r = _note_map(e)
+        # #     if len(r)==0:
+        # #         raise ValueError
+        # #     return r
                     
-        w = 1 if steer_density is None else 2**(steer_density*2-1)
+        # w = 1 if steer_density is None else 2**(steer_density*2-1)
         
-        w_on = 0 if no_on else w
-        w_off = 0 if no_off else 1/w
+        # w_on = 0 if no_on else w
+        # w_off = 0 if no_off else 1/w
 
-        min_vel = max(0.5, 0 if min_vel is None else min_vel)
-        max_vel = torch.inf if max_vel is None else max_vel
+        # min_vel = max(0.5, 0 if min_vel is None else min_vel)
+        # max_vel = torch.inf if max_vel is None else max_vel
 
-        # print(f'{truncate_quantile_vel=}')
+        # # print(f'{truncate_quantile_vel=}')
         
-        return self.deep_query(Query(
-            'vel', 
-            cases=(
-                Range(-torch.inf,0.5,w_off), 
-                Range(0.5,torch.inf,w_on,
-                    min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
-            then=lambda e: Query(
-                'inst', 
-                whitelist={
-                    i:inst_weights.get(i,1) if e['vel'] > 0.5 else 1 
-                    for i in note_map(e)},
-                then=lambda e: Query(
-                    'pitch', 
-                    whitelist=note_map(e),
-                    top_p=pitch_temp,
-                    truncate_quantile=(
-                        None if (
-                            e['vel']==0 
-                            or self.is_drum(e['inst']) 
-                            or e['inst'] in no_steer)
-                        else truncate_quantile_pitch),
-                    then=lambda e: Query(
-                        'time', #'note on' if e['vel']>0 else 'note off',         
-                        truncate=(
-                            min_time if e['vel']>0.5 
-                            else soonest_off[(e['inst'],e['pitch'])],
-                            latest_event
-                        ),
-                        truncate_quantile=(
-                            None if e['inst'] in no_steer
-                            else truncate_quantile_time),
-                        weight_top_p=rhythm_temp, 
-                        component_temp=timing_temp
-        )))))
+        # return self.deep_query(Query(
+        #     'vel', 
+        #     cases=(
+        #         Range(-torch.inf,0.5,w_off), 
+        #         Range(0.5,torch.inf,w_on,
+        #             min_vel,max_vel,truncate_quantile=truncate_quantile_vel)),
+        #     then=lambda e: Query(
+        #         'inst', 
+        #         whitelist={
+        #             i:inst_weights.get(i,1) if e['vel'] > 0.5 else 1 
+        #             for i in note_map(e)},
+        #         then=lambda e: Query(
+        #             'pitch', 
+        #             whitelist=note_map(e),
+        #             top_p=pitch_temp,
+        #             truncate_quantile=(
+        #                 None if (
+        #                     e['vel']==0 
+        #                     or self.is_drum(e['inst']) 
+        #                     or e['inst'] in no_steer)
+        #                 else truncate_quantile_pitch),
+        #             then=lambda e: Query(
+        #                 'time', #'note on' if e['vel']>0 else 'note off',         
+        #                 truncate=(
+        #                     min_time if e['vel']>0.5 
+        #                     else soonest_off[(e['inst'],e['pitch'])],
+        #                     latest_event
+        #                 ),
+        #                 truncate_quantile=(
+        #                     None if e['inst'] in no_steer
+        #                     else truncate_quantile_time),
+        #                 weight_top_p=rhythm_temp, 
+        #                 component_temp=timing_temp
+        # )))))
     
     # def query_ipvt(self,
     #     note_map, 
@@ -1643,18 +1665,18 @@ class Notochord(nn.Module):
 
             allow_end:bool=False,
 
-            include_inst:List[int]=None, exclude_inst:List[int]=None,
+            include_inst:set[int]=None, exclude_inst:set[int]=None,
             allow_anon:bool=True, 
             instrument_temp:float=None, 
 
-            include_pitch:List[int]=None, exclude_pitch:List[int]=None,
-            include_drum:List[int]=None,
+            include_pitch:set[int]=None, exclude_pitch:set[int]=None,
+            include_drum:set[int]=None,
             truncate_quantile_pitch:Tuple[float,float]=None,
             pitch_temp:float=None, 
             index_pitch:int=None,
 
             min_time:float=None, max_time:float=None,
-            truncate_quantile_time:Tuple[float, float]=None,
+            truncate_quantile_time:tuple[float, float]=None,
             rhythm_temp:float=None, timing_temp:float=None,
 
             min_vel:int=None, max_vel:int=None,
@@ -1797,7 +1819,7 @@ class Notochord(nn.Module):
             set(range(self.instrument_domain)) - {self.instrument_start_token}
             if include_inst is None 
             else arg_to_set(include_inst)
-        ) - exclude_inst)
+        ) - exclude_inst) #type: ignore
         if len(constrain_inst)==0:
             raise ValueError(f"""
             every instrument has been excluded. 
@@ -1988,7 +2010,7 @@ class Notochord(nn.Module):
             # for each undetermined modality, 
             # sample a new value conditioned on already determined ones
             
-            running_ctx = sum(context)
+            running_ctx = sum(context, start=torch.tensor(0.))
             # print(running_ctx)
             # perm_h_tgt = [h_tgt[i] for i in perm]
             while len(undet_idx):
@@ -2017,22 +2039,22 @@ class Notochord(nn.Module):
                 # print(end_params)
                 end = D.Categorical(logits=end_params).sample()
             else:
-                end = torch.zeros(self.h.shape[:-1])
+                end = torch.zeros(self.h.shape[:-1]) #type:ignore
 
             if sweep_time or pitch_topk:
                 # return lists of predictions
-                pred_inst = [x.item() for x in pred_inst]
-                pred_pitch = [x.item() for x in pred_pitch]
-                pred_time = [x.item() for x in pred_time]
-                pred_vel = [x.item() for x in pred_vel]
+                pred_inst = [x.item() for x in pred_inst] #type:ignore
+                pred_pitch = [x.item() for x in pred_pitch] #type:ignore
+                pred_time = [x.item() for x in pred_time] #type:ignore
+                pred_vel = [x.item() for x in pred_vel] #type:ignore
                 end = [x.item() for x in end]
                 # print(pred_time, pred_pitch, pred_vel)
             else:
                 # return single predictions
-                pred_inst = pred_inst.item()
-                pred_pitch = pred_pitch.item()
-                pred_time = pred_time.item()
-                pred_vel = pred_vel.item()
+                pred_inst = pred_inst.item() #type:ignore
+                pred_pitch = pred_pitch.item() #type:ignore
+                pred_time = pred_time.item() #type:ignore
+                pred_vel = pred_vel.item() #type:ignore
                 end = end.item()
 
             r = {
@@ -2065,7 +2087,7 @@ class Notochord(nn.Module):
         self.feed(inst, pitch, time, vel)
         return self.query(**kw)
 
-    def feed_query(self, inst:int, pitch:int, time:Number, vel:Number, 
+    def feed_query(self, inst:int, pitch:int, time:float, vel:float, 
  **kw):
         """
         feed an event to the model, 
@@ -2084,7 +2106,7 @@ class Notochord(nn.Module):
         return r
 
     def feed_query_feed(self, 
-            inst:int, pitch:int, time:Number, vel:Number, 
+            inst:int, pitch:int, time:float, vel:float, 
             **kw):
         """
         given an event, return the next predicted event, 
@@ -2216,7 +2238,7 @@ class InstrumentData:
         self.channels = set()
         self.pitches = set()
         self.velocities = set()
-        self.orig_inst = None
+        self.orig_inst:int|None = None
         self.notes = 0
         self.shortened = 0
         self.dropped = 0
@@ -2226,8 +2248,8 @@ class InstrumentData:
 @mem.cache(ignore=('noto',))
 def prompt(
     noto:Notochord, midi_file:str|Path, 
-    merge:bool=False, insert_threshold:Number=0.05, 
-    jitter:Number=1e-4,
+    merge:bool=False, insert_threshold:float=0.05, 
+    jitter:float=1e-4,
     state_hash:int|None=None): 
     # state_hash is used for disk cache only
     """Read a MIDI file and feed events to a Notochord model.
