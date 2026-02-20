@@ -5,6 +5,8 @@ import torch.distributions as D
 import torch.nn.functional as F
 from numbers import Number
 
+from .event import SupportMultiRange
+
 def reweight_quantile(probs, min_q=0, max_q=1):
     """
     reweight ordinal discrete distribution to have mass only between quantiles
@@ -225,6 +227,16 @@ class CensoredMixtureLogistic(nn.Module):
         """
         if truncate_quantile == (0,1):
             truncate_quantile = None
+
+        if isinstance(truncate, SupportMultiRange):
+            # categorical sample among ranges
+            # TODO: quantile truncation and temperature are after this
+            # and so they aren't correct in multi-range case
+            probs = [
+                (self.cdf(h, r.hi) - self.cdf(h, r.lo)) #* r.weight
+                for r in truncate.ranges]
+            idx = categorical_sample(torch.tensor(probs).log())
+            truncate = truncate.ranges[idx].bounds()
 
         if truncate is None:
             truncate = (-torch.inf, torch.inf)

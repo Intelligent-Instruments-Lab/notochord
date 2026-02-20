@@ -64,10 +64,13 @@ class EventSteering:
     steer_density:float|None = None
     inst_weights:MutableMapping[int,float]|None = None
 
+@dataclass
 class SupportRange:
-    def __init__(self, lo:float=None, hi:float=None):
-        self.lo = float('-inf') if lo is None else lo
-        self.hi = float('inf') if hi is None else hi
+    lo:float = -torch.inf
+    hi:float = torch.inf
+    # def __init__(self, lo:float=None, hi:float=None):
+        # self.lo = float('-inf') if lo is None else lo
+        # self.hi = float('inf') if hi is None else hi
 
     def __repr__(self):
         return f'SupportRange({self.lo}, {self.hi})'
@@ -79,7 +82,8 @@ class SupportRange:
         return SupportRange(max(self.lo, other.lo), min(self.hi, other.hi))
     
     def __or__(self, other):
-        return SupportRange(min(self.lo, other.lo), max(self.hi, other.hi))
+        # return SupportRange(min(self.lo, other.lo), max(self.hi, other.hi))
+        return SupportMultiRange([self, other])
     
     def size(self):
         return self.hi - self.lo
@@ -89,6 +93,58 @@ class SupportRange:
     
     def copy(self):
         return SupportRange(self.lo, self.hi)
+    
+    def value(self):
+        if self.lo==self.hi:
+            return self.lo
+        return None
+    
+class SupportMultiRange:
+    def __init__(self, ranges):
+        self.ranges = ranges
+        self.normalize()
+
+    def normalize(self):
+        """merge any overlapping ranges"""
+        complete = []
+        working = self.ranges
+        remaining = []
+        while len(working):
+            r = working.pop()
+            others = working.copy()
+            while len(others):
+                r_other = others.pop()
+                # if they overlap, merge into r
+                if (r & r_other).size():
+                    r = SupportRange(min(r.lo, r_other.lo), max(r.hi, r_other.hi))
+                else:
+                    remaining.append(r_other)
+            complete.append(r)
+            working = remaining
+        self.ranges = complete
+
+    def __or__(self, other):
+        if isinstance(other, SupportMultiRange):
+            return SupportMultiRange(self.ranges + other.ranges)
+        elif isinstance(other, SupportRange):
+            return SupportMultiRange(self.ranges + [other])
+        else: raise TypeError
+    
+    def __contains__(self, item) -> bool:
+        return any(item in r for r in self.ranges)
+    
+    def empty(self) -> bool:
+        return not any(r.size()>=0 for r in self.ranges)
+    
+    def value(self) -> float|None:
+        values = []
+        for r in self.ranges:
+            v = r.value()
+            if v is not None:
+                values.append(v)
+        if len(values)==1:
+            return next(iter(values))
+        return None
 
 
 @dataclass 
@@ -239,16 +295,16 @@ class Support:
     
     def marginal_time(self):
         if not len(self.atoms):
-            return SupportRange(1,-1) # barf
-        m = self.atoms[0].time
+            return SupportMultiRange([])
+        m = SupportMultiRange([self.atoms[0].time])
         for a in self.atoms[1:]:
             m = m | a.time 
         return m
     
     def marginal_vel(self):
         if not len(self.atoms):
-            return SupportRange(1,-1) # barf
-        m = self.atoms[0].vel
+            return SupportMultiRange([])
+        m = SupportMultiRange([self.atoms[0].vel])
         for a in self.atoms[1:]:
             m = m | a.vel 
         return m
@@ -313,14 +369,18 @@ class NotochordEvent():
                     continue
             if self.time is None:
                 t = self.support.marginal_time()
-                if max(0, t.lo)==t.hi:
-                    self.set('t', t.hi)
+                val = t.value()
+                if val is not None:
+                    self.set('t', val)
                     print(f'time determined by constraint for {self}')
                     continue
             if self.vel is None:
-                t = self.support.marginal_vel()
-                if t.hi <= 0.5:
-                    self.set('v', 0)
+                v = self.support.marginal_vel()
+                val = v.value()
+                if all(r.hi <= 0.5 for r in v.ranges):
+                    val = 0
+                if val is not None:
+                    self.set('v', val)
                     print(f'vel determined by constraint for {self}')
                     continue
             break

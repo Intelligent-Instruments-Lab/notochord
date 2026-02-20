@@ -932,7 +932,7 @@ class Notochord(nn.Module):
         elif modality=='t':
             return self.time_dist.sample(
                 params,
-                truncate=event.support.marginal_time().bounds(),
+                truncate=event.support.marginal_time(),
                 truncate_quantile=tqt,
                 weight_top_p=steer.rhythm_temp,
                 component_temp=steer.timing_temp,
@@ -941,7 +941,7 @@ class Notochord(nn.Module):
             # TODO: steer_density
             return self.vel_dist.sample(
                 params,
-                truncate=event.support.marginal_vel().bounds(),
+                truncate=event.support.marginal_vel(),
                 truncate_quantile=tqv
             ).round()
         else:
@@ -955,6 +955,11 @@ class Notochord(nn.Module):
         ):
         """
         """
+
+        if order is None:
+
+            pass#TODO
+
         # t = time.time_ns()
         event = self.init_event(cons)
         event.autoset()
