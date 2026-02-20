@@ -43,6 +43,7 @@ class Trainer:
         n_jobs = 1, # for dataloaders
         device = 'cpu', # 'cuda:0'
         epoch_size = None, # in iterations, None for whole dataset
+        valid_size = None, # samples w replacement, None for once through
         txala = False,
         txala_remap = False,
         txala_permute = False,
@@ -261,12 +262,16 @@ class Trainer:
             self.train_dataset, self.batch_size,
             shuffle=True, num_workers=self.n_jobs, pin_memory=self.gpu)
 
+        valid_sampler = None
+        if self.valid_size is not None:
+            valid_sampler = RandomSampler(
+                self.valid_dataset, 
+                num_samples=self.valid_size*self.batch_size, 
+                replacement=True)
         valid_loader = DataLoader(
             self.valid_dataset, self.batch_size,#//4,
             shuffle=False, num_workers=self.n_jobs, pin_memory=self.gpu,
-            sampler=RandomSampler(
-                self.valid_dataset, 
-                num_samples=self.batch_size, replacement=True))
+            sampler=valid_sampler)
 
         ##### validation loop
         def run_validation():
