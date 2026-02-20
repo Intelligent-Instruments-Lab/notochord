@@ -746,7 +746,10 @@ def main(
             if self.event is None:
                 return False
             
-            end_prob = self.event.get('end', 0) ** end_exponent
+            if 'end' in self.event:
+                end_prob = self.event['end'] ** end_exponent
+            else:
+                end_prob = 0
             self.cum_end_prob = 1 - (1-self.cum_end_prob)*(1-end_prob)
             # print(f'{self.cum_end_prob=}')
 

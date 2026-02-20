@@ -318,6 +318,7 @@ class NotochordEvent():
     pitch: int|None = None
     time: float|None = None
     vel: float|None = None
+    end: float|None = None
     support: Support = field(default_factory=Support)
 
     def as_dict(self):
@@ -325,7 +326,8 @@ class NotochordEvent():
             'time':self.time,
             'vel':self.vel,
             'pitch':self.pitch,
-            'inst':self.inst
+            'inst':self.inst,
+            'end':self.end
         }
 
     def is_complete(self):
