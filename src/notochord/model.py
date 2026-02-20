@@ -260,6 +260,9 @@ class Notochord(nn.Module):
         self.h = None
         self.h_query = None
 
+    def device(self):
+        return self.end_proj.weight.device
+
     def default_note_map(self):
         return {
             i:set(range(128)) 
@@ -486,7 +489,7 @@ class Notochord(nn.Module):
         n_anon = (self.instrument_domain - 257)//2
         i = self.first_anon_like(i)
         return range(i, i+n_anon)
-    
+        
     def feed(self, 
             inst:int|torch.LongTensor, 
             pitch:int|torch.LongTensor,
@@ -530,10 +533,10 @@ class Notochord(nn.Module):
         # update RNN state
 
         with torch.inference_mode():
-            inst = torch.LongTensor([[inst]]) # 1x1 (batch, time)
-            pitch = torch.LongTensor([[pitch]]) # 1x1 (batch, time)
-            time = torch.FloatTensor([[time]]) # 1x1 (batch, time)
-            vel = torch.FloatTensor([[vel]]) # 1x1 (batch, time)
+            inst = torch.LongTensor([[inst]]).to(self.device()) # 1x1 (batch, time)
+            pitch = torch.LongTensor([[pitch]]).to(self.device()) # 1x1 (batch, time)
+            time = torch.FloatTensor([[time]]).to(self.device()) # 1x1 (batch, time)
+            vel = torch.FloatTensor([[vel]]).to(self.device()) # 1x1 (batch, time)
 
             embs = [
                 self.instrument_emb(inst), # 1, 1, emb_size
@@ -752,7 +755,9 @@ class Notochord(nn.Module):
                     inst={i}, 
                     pitch=ps, 
                     time=SupportRange(cons.min_time),
-                    vel=SupportRange(max(0.5, cons.min_vel or 0), cons.max_vel)
+                    vel=SupportRange(
+                        max(0.5, cons.get('min_vel', i) or 0),
+                        cons.get('max_vel', i))
                     ))
                    
 
@@ -773,12 +778,18 @@ class Notochord(nn.Module):
                     time=SupportRange(cons.min_time),
                     vel=SupportRange(hi=0.5)
                     ))
-            
-        # make max interevent time a soft constraint
-        event.support.penalize_later(
-            cons.max_time, 
-            cons.penalty[Constraint.MAX_TIME], 
-            Constraint.MAX_TIME)
+                
+        if cons.vel is not None:
+            event.set('v', cons.vel)
+                
+        if cons.time is not None:
+            event.set('t', cons.time)
+        elif cons.max_time < torch.inf:
+            # make max interevent time a soft constraint
+            event.support.penalize_later(
+                cons.max_time, 
+                cons.penalty[Constraint.MAX_TIME], 
+                Constraint.MAX_TIME)
         
         return event
           
@@ -911,9 +922,8 @@ class Notochord(nn.Module):
             and event.inst in cons.external)
         if modality=='i':
             # apply instrument weights
-            if cons.inst_weights is not None:
-                for i, w in cons.inst_weights.items():
-                    params[...,i] += math.log(w)
+            for i, w in cons.inst_weights.items():
+                params[...,i] += math.log(w)
             return categorical_sample(
                 params, 
                 whitelist=event.support.marginal_inst(),
@@ -961,12 +971,14 @@ class Notochord(nn.Module):
         else:
             raise ValueError
 
-    def query_neo(self, 
-            cons:EventConstraints, 
-            order:str='vtip'
+    def sample(self, 
+            cons:EventConstraints=None, 
+            order:str='vtip',
         ):
         """
         """
+        if cons is None: cons = EventConstraints()
+
         if order=='random':
             order_ = list('iptv')
             random.shuffle(order_)
@@ -1043,7 +1055,7 @@ class Notochord(nn.Module):
                     event.autoset()
                 
                 if not isinstance(value, torch.Tensor):
-                    value = torch.tensor([[value]])
+                    value = torch.tensor([[value]], device=ctx.device)
                     
                 # embed
                 ctx = ctx + self.embedding(m)(value)
@@ -1158,18 +1170,12 @@ class Notochord(nn.Module):
             inst_weights=inst_weights,
             external=no_steer or set()
             )
-        event = self.query_neo(
+        return self.sample(
             EventConstraints(**{
                 k:v for k,v in cons_kw.items() if v is not None
                 }), # type: ignore
             'vtip'
-        )
-        return {
-            'time':event.time,
-            'vel':event.vel,
-            'pitch':event.pitch,
-            'inst':event.inst
-        }
+        ).as_dict()
         # NOTE: have to add epsilon when comparing sampled times,
         # or else rounding error can cause discrepancy 
         # eps = 1e-5
@@ -1459,18 +1465,12 @@ class Notochord(nn.Module):
             steer_density=steer_density,
             inst_weights=inst_weights,
             external=no_steer)
-        event = self.query_neo(
+        return self.sample(
             EventConstraints(**{
                 k:v for k,v in cons_kw.items() if v is not None
                 }), # type: ignore
             'vipt'
-        )
-        return {
-            'time':event.time,
-            'vel':event.vel,
-            'pitch':event.pitch,
-            'inst':event.inst
-        }
+        ).as_dict()
         # # NOTE: weird behavior can result when contraints are applied to 
         # # an input voice.
         # # but i don't think it would work well to completely ignore constraints on

@@ -148,13 +148,13 @@ range = [0, 1] # clips values outside of this range
 [[control]]
 name = 'steer_density'
 control_change = [2, 75]
-value = 0.5
+value = 0.45
 range = [0, 1]
 
 [[control]]
 name = 'steer_rate'
 control_change = [3, 76]
-value = 0.5
+value = 0.45
 range = [0, 1]
 
 [[control]]
@@ -173,6 +173,12 @@ range = [0, 1]
 name = 'rhythm_temp'
 control_change = [6, 79]
 value = 1
+range = [0, 1]
+
+[[control]]
+name = 'pitch_temp'
+control_change = [7, 80]
+value = 0.9
 range = [0, 1]
 
 # actions: things that happen when MIDI or OSC is received

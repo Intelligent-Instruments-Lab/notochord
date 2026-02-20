@@ -50,7 +50,8 @@ def categorical_sample(
         idx = list(whitelist)
         preserve_logits = logits[...,idx]
         if isinstance(whitelist, dict):
-            preserve_logits += torch.tensor(list(whitelist.values())).log()
+            preserve_logits += torch.tensor(
+                list(whitelist.values()), logits.device).log()
         logits = torch.full_like(logits, -torch.inf)
         logits[..., idx] = preserve_logits
 
@@ -111,6 +112,9 @@ class CensoredMixtureLogistic(nn.Module):
             self.bias = nn.Parameter(torch.cat((
                 torch.zeros(n), torch.randn(n), torch.zeros(n)
                 )))
+            
+    def device(self):
+        return self.bias.device
 
     @property
     def n_params(self):
@@ -189,7 +193,7 @@ class CensoredMixtureLogistic(nn.Module):
             cdf: Tensor[...] (shape of `x` broadcasted with `h[...,0]`)
         """
         if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x)
+            x = torch.tensor(x, device=h.device)
         log_pi, loc, s = self.get_params(h)  
         cdfs = self.cdf_components(loc, s, x)
         cdf = (cdfs * log_pi.softmax(-1)).sum(-1)
@@ -235,7 +239,8 @@ class CensoredMixtureLogistic(nn.Module):
             probs = [
                 (self.cdf(h, r.hi) - self.cdf(h, r.lo)) * r.weight
                 for r in truncate.ranges]
-            idx = categorical_sample(torch.tensor(probs).log())
+            idx = categorical_sample(
+                torch.tensor(probs, device=h.device).log())
             truncate = truncate.ranges[idx].bounds()
 
         if truncate is None:
@@ -243,8 +248,9 @@ class CensoredMixtureLogistic(nn.Module):
         # early out in the single possibility case
         if truncate[0] == truncate[1]:
             return torch.tensor(
-                [truncate[0]]*shape if shape is not None else truncate[0])
-        truncate = torch.tensor(truncate)
+                [truncate[0]]*shape if shape is not None else truncate[0],
+                device=h.device)
+        truncate = torch.tensor(truncate, device=h.device)
 
         if shape is None:
             unwrap = True
@@ -283,7 +289,7 @@ class CensoredMixtureLogistic(nn.Module):
         upper = cdfs[...,1,:].movedim(-1, 0).gather(0, c)
         lower = cdfs[...,0,:].movedim(-1, 0).gather(0, c)
 
-        u = torch.rand(shape, *h.shape[:-1])
+        u = torch.rand(shape, *h.shape[:-1], device=h.device)
         # truncate
         u = u * (upper-lower) + lower
 

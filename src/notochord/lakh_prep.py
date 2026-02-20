@@ -257,10 +257,10 @@ def process(fnames):
 
     time, vel, pitch, prog = zip(*events)
     torch.save(dict(
-        time=torch.DoubleTensor(time), 
-        pitch=torch.LongTensor(pitch), 
-        velocity=torch.LongTensor(vel),
-        program=torch.LongTensor(prog)
+        time=torch.FloatTensor(time), 
+        pitch=torch.ShortTensor(pitch), 
+        velocity=torch.ShortTensor(vel),
+        program=torch.IntTensor(prog)
     ), g.with_suffix('.pkl'))
 
 

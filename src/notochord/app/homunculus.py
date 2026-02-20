@@ -62,7 +62,7 @@ import torch
 torch.set_num_threads(1)
 
 import iipyper, notochord
-from notochord import Notochord, NotoPerformance, NoPossibleEvents
+from notochord import Notochord, NotoPerformance, NoPossibleEvents, EventConstraints
 from notochord.util import deep_update
 from iipyper import OSC, MIDI, run, Stopwatch, repeat, cleanup, TUI, profile, lock
 
@@ -121,8 +121,8 @@ def main(
     max_time=None, # max time between events
     nominal_time=True, #DEPRECATED
 
-    min_vel=None, #mininum velocity (besides noteOffs)
-    max_vel=None, # maximum velocity
+    # min_vel=None, #mininum velocity (besides noteOffs)
+    # max_vel=None, # maximum velocity
 
     osc_port=None, # if supplied, listen for OSC to set controls on this port
     osc_host='', # leave this as empty string to get all traffic on the port
@@ -145,6 +145,7 @@ def main(
     profiler=0,
     wipe_presets=False,
     launchpad_control=False,
+    torch_device='cpu' # note that cuda/mps unlikely to be faster
     ):
     """
     This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. It allows combining both 'harmonizer' and 'improviser' features.
@@ -297,9 +298,6 @@ def main(
             default is the Notochord model's maximum (usually 10 seconds).
         lateness_margin:
             when events are playing later than this (in seconds), slow down
-
-        min_vel: mininum velocity (except for noteOffs where vel=0)
-        max_vel: maximum velocity
 
         osc_port: 
             optional. if supplied, listen for OSC to set controls
@@ -465,10 +463,10 @@ def main(
 
     # load notochord model
     try:
-        noto = Notochord.from_checkpoint(checkpoint)
+        noto = Notochord.from_checkpoint(checkpoint).to(torch_device)
         noto.eval()
         noto.feed(0,0,0,0) # smoke test
-        noto.query()
+        noto.sample()
         noto.reset()
     except Exception:
         print("""error loading notochord model""")
@@ -900,9 +898,16 @@ def main(
                 else:
                     # notochord chooses pitch
                     with profile('noto.query', print=print, enable=profiler):
-                        pending.set(noto.query(
-                            next_inst=noto_inst, next_time=dt, next_vel=source_vel,
-                            include_pitch=pitches))
+                        note_off_map = note_on_map = {}
+                        if source_vel > 0:
+                            note_on_map = {noto_inst:pitches}
+                        else:
+                            note_off_map = {noto_inst:pitches}
+                        pending.set(noto.sample(EventConstraints(
+                            note_on_map, note_off_map, 
+                            time=dt, vel=source_vel,
+                            external={noto_inst}
+                            )).as_dict())
                         
                 pending.sample_end() # track cumulative end prob
                 play_event(
@@ -997,26 +1002,6 @@ def main(
             predict_input=predict_input, 
             predict_follow=predict_follow,
             immediate=False):
-        
-        # NOTE: replaced this with duration constraints;
-        # should test more before deleting
-        # check for stuck notes
-        # and prioritize ending those
-        # for (_, inst, pitch), note_data in history.note_data.items():
-        #     dur = note_data['duration'].read()
-        #     if (
-        #         inst in mode_insts('auto') 
-        #         and dur > max_note_len*(.1+controls.get('steer_duration', 1))
-        #         ):
-        #         # query for the end of a note with flexible timing
-        #         # with profile('query', print=print, enable=profiler):
-        #         t = pending.time_since()
-        #         mt = max(t, min(max_time or np.inf, t+0.2))
-        #         pending.set(noto.query(
-        #             next_inst=inst, next_pitch=pitch,
-        #             next_vel=0, min_time=t, max_time=mt))
-        #         print(f'END STUCK NOTE {inst=},{pitch=},{dur=}')
-        #         return
 
         if immediate:
             # sampling immediately after realizing an event
@@ -1060,9 +1045,6 @@ def main(
         if lateness > soft_lateness_margin and lateness <= lateness_margin:
             steer_time = 1
             print(f'set {steer_time=} due to {lateness=}')
-
-        rhythm_temp = controls.get('rhythm_temp', 1)
-        timing_temp = controls.get('timing_temp', 1)
         
         tqt = (max(0,steer_time-0.5), min(1, steer_time+0.5))
         tqp = (max(0,steer_pitch-0.5), min(1, steer_pitch+0.5))
@@ -1073,7 +1055,7 @@ def main(
         # ideally this would distinguish sustained from percussive instruments too
         
         # balance_sample: note-ons only from instruments which have played less
-        inst_weights = None
+        inst_weights = {}
         if balance_sample:
             counts = defaultdict(int)
             for i,c in history.inst_counts(n=n_recent).items():
@@ -1092,14 +1074,16 @@ def main(
         # VTIP is better for time interventions,
         # VIPT is better for instrument interventions
         if min_time > estimated_latency or abs(steer_time-0.5) > abs(steer_pitch-0.5):
-            query_method = noto.query_vtip
+            # query_method = noto.query_vtip
+            query_order = 'vtip'
             # print('VTIP')
         else:
-            query_method = noto.query_vipt
+            # query_method = noto.query_vipt
+            query_order = 'vipt'
             # print('VIPT')
         # query_method = noto.query_vipt ### DEBUG
         # query_method = noto.query_vtip ### DEBUG
-        query_method = profile(print=print, enable=profiler)(query_method)
+        sample = profile(print=print, enable=profiler)(noto.sample)
 
         # print(f'considering {insts} for note_on')
         # use only currently selected instruments
@@ -1110,6 +1094,8 @@ def main(
             if i in inst_pitch_map
         }
 
+        min_vel = {}
+        max_vel = {}
         min_polyphony = {}
         max_polyphony = {}
         min_duration = {}
@@ -1118,6 +1104,8 @@ def main(
             c = auto_inst_channel(i)
             if c is None: continue
             cfg = config[c]
+            if cfg is not None and cfg.get('vel') is not None:
+                min_vel[i], max_vel[i] = cfg['vel']
             if cfg is not None and cfg.get('poly') is not None:
                 min_polyphony[i], max_polyphony[i] = cfg['poly']
             if cfg is not None and cfg.get('duration') is not None:
@@ -1127,11 +1115,11 @@ def main(
 
         # print(note_on_map, note_off_map)
 
-        max_t = None if max_time is None else max(max_time, min_time+0.2)
+        max_t = torch.inf if max_time is None else max(max_time, min_time+0.2)
 
         # print(f'{note_on_map=}')
         try:
-            pending.set(query_method(
+            pending.set(sample(EventConstraints(
                 note_on_map, #note_off_map,
                 min_polyphony=min_polyphony, max_polyphony=max_polyphony,
                 min_duration=min_duration, max_duration=max_duration,
@@ -1140,12 +1128,13 @@ def main(
                 truncate_quantile_time=tqt,
                 truncate_quantile_pitch=tqp,
                 truncate_quantile_vel=tqv,
-                rhythm_temp=rhythm_temp,
-                timing_temp=timing_temp,
+                pitch_temp=controls.get('pitch_temp', 1),
+                rhythm_temp=controls.get('rhythm_temp', 1),
+                timing_temp=controls.get('timing_temp', 1),
                 steer_density=steer_density,
                 inst_weights=inst_weights,
-                no_steer=mode_insts(('input','follow'), allow_muted=False),
-            ))
+                external=mode_insts(('input','follow'), allow_muted=False),
+            )).as_dict())
         except NoPossibleEvents:
             print(f'no possible events')
             # print(f'stopping; no possible events')

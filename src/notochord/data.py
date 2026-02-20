@@ -87,15 +87,15 @@ class MIDIDataset(Dataset):
     def __getitem__(self, idx):
         f = self.files[idx]
         item = torch.load(f)
-        program = item['program'] # 1-d LongTensor of MIDI programs
+        program = item['program'] # 1-d ShortTensor of MIDI programs
         # 0 is unused
         # (128-256 are drums)
         # 257+ are 'true anonymous' (no program change on track)
         # (drums with no PC are just mapped to 129)
         # N + 1000*K is the Kth additional part for instrument N
-        pitch = item['pitch'] # 1-d LongTensor of MIDI pitches 0-127
-        time = item['time'] # 1-d DoubleTensor of absolute times in seconds
-        velocity = item['velocity'] # 1-d LongTensor of MIDI velocities 0-127
+        pitch = item['pitch'] # 1-d ShortTensor of MIDI pitches 0-127
+        time = item['time'] # 1-d FloatTensor of absolute times in seconds
+        velocity = item['velocity'] # 1-d ShortTensor of MIDI velocities 0-127
 
         assert len(pitch) == len(time)
 
@@ -149,11 +149,11 @@ class MIDIDataset(Dataset):
             # random slice
             i = random.randint(0, len(pitch)-self.batch_len)
             sl = slice(i, i+self.batch_len)
-        program = program[sl]
-        pitch = pitch[sl]
-        time = time[sl]
-        velocity = velocity[sl]
-        end = end[sl]
+        program = program[sl].long()
+        pitch = pitch[sl].long()
+        time = time[sl].float()
+        velocity = velocity[sl].float()
+        end = end[sl].long()
         mask = mask[sl]
 
         return {
@@ -200,6 +200,8 @@ class MIDIDataset(Dataset):
 
         time_margin = 1e-3
 
+        # random augment tempo
+        time = time * (1 + random.random()*self.speed*2 - self.speed)
         # dequantize: add noise up to +/- margin
         # move note-ons later, note-offs earlier
         # NOTE this actually did the opposite of previous comment!
@@ -207,8 +209,6 @@ class MIDIDataset(Dataset):
         time = (time + 
             torch.rand_like(time) * ((velocity>0).double()*2-1) * time_margin
         )
-        # random augment tempo
-        time = time * (1 + random.random()*self.speed*2 - self.speed)
 
         velocity = self.velocity_dequantize(velocity)
         velocity = self.velocity_curve(velocity)

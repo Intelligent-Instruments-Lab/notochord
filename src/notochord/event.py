@@ -31,10 +31,12 @@ NoteMap = dict[int,set[int]]|dict[int,Collection[int]]
 class EventConstraints:
     note_on_map:NoteMap|None = None # inst:[pitch]
     note_off_map:NoteMap|None = None
+    time:float|None = None
+    vel:float|None = None
     min_time:float = -torch.inf
     max_time:float = torch.inf
-    min_vel:float = -torch.inf
-    max_vel:float = torch.inf
+    min_vel:MutableMapping[int,float]|float = -torch.inf
+    max_vel:MutableMapping[int,float]|float = torch.inf
     min_polyphony:MutableMapping[int,int]|int = 0 
     max_polyphony:MutableMapping[int,int]|int = 128
     min_duration:MutableMapping[int,float]|float = 0 
@@ -318,6 +320,14 @@ class NotochordEvent():
     vel: float|None = None
     support: Support = field(default_factory=Support)
 
+    def as_dict(self):
+        return {
+            'time':self.time,
+            'vel':self.vel,
+            'pitch':self.pitch,
+            'inst':self.inst
+        }
+
     def is_complete(self):
         return (
             self.inst is not None and 
@@ -349,6 +359,9 @@ class NotochordEvent():
         else:
             raise ValueError
         
+    def __str__(self):
+        return f'(inst={self.inst}, pitch={self.pitch}, time={self.time}, vel={self.vel})'
+        
     def autoset(self):
         """check if support has been reduced to a single possibility for any modality, and set it"""
         # this while/continue/break structure
@@ -359,20 +372,20 @@ class NotochordEvent():
                 i = self.support.marginal_inst()
                 if len(i)==1:
                     self.set('i', next(iter(i)))
-                    print(f'inst determined by constraint for {self}')
+                    print(f'inst fully constrained {self}')
                     continue
             if self.pitch is None:
                 p = self.support.marginal_pitch()
                 if len(p)==1:
                     self.set('p', next(iter(p)))
-                    print(f'pitch determined by constraint for {self}')
+                    print(f'pitch fully constrained {self}')
                     continue
             if self.time is None:
                 t = self.support.marginal_time()
                 val = t.value()
                 if val is not None:
                     self.set('t', val)
-                    print(f'time determined by constraint for {self}')
+                    print(f'time fully constrained {self}')
                     continue
             if self.vel is None:
                 v = self.support.marginal_vel()
@@ -381,7 +394,7 @@ class NotochordEvent():
                     val = 0
                 if val is not None:
                     self.set('v', val)
-                    print(f'vel determined by constraint for {self}')
+                    print(f'vel fully constrained {self}')
                     continue
             break
             

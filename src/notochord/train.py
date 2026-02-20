@@ -114,10 +114,10 @@ class Trainer:
         valid_len = max(min_valid, int(len(self.dataset)*0.03))
         test_len = max(min_test, int(len(self.dataset)*0.02))
         train_len = len(self.dataset) - valid_len - test_len
-        print(f'{valid_len=} {test_len=} {train_len=}')
         self.train_dataset, self.valid_dataset, self.test_dataset = torch.utils.data.random_split(
             self.dataset, [train_len, valid_len, test_len], 
             generator=torch.Generator().manual_seed(0))
+        print(f'{len(self.train_dataset)=} {len(self.valid_dataset)=} {len(self.test_dataset)=}')
 
         # params = {k:v for k,v in self.model.named_parameters()}
         # ks = ['projections.3.net.1.weight', 'projections.2.net.1.weight']

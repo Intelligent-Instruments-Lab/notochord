@@ -16,6 +16,7 @@ def help():
         txalaparta: run the txalaparta app
         morse: run the morse code app
         prompt: run a MIDI file through a notochord model and cache hidden states
+        prep: preprocess MIDI files for training
         train: train a Notochord model (GPU recommended)
         files: show the location of Notochord models and config files on disk
     """)
@@ -44,9 +45,14 @@ def _main():
         if sys.argv[1] == 'prompt':
             fire.Fire(prompt, sys.argv[2:])
             return
+        if sys.argv[1] == 'prep':
+            from notochord.lakh_prep import main as prep
+            fire.Fire(prep, sys.argv[2:])
+            return
         if sys.argv[1] == 'train':
             from notochord.train import Resumable
-            fire.Fire(Resumable, sys.argv[1:])
+            fire.Fire(Resumable, sys.argv[1:]+['train'])
+            return
         if sys.argv[1] == 'files':
             d = Notochord.user_data_dir()
             print(d)
