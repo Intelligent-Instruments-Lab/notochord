@@ -7,13 +7,13 @@ from numbers import Number
 
 from .event import SupportMultiRange
 
-def reweight_quantile(probs, min_q=0, max_q=1):
-    """
-    reweight ordinal discrete distribution to have mass only between quantiles
-    """
-    # TODO
-    cdf = probs.cumsum(-1)
-    raise NotImplementedError
+# def reweight_quantile(probs, min_q=0, max_q=1):
+#     """
+#     reweight ordinal discrete distribution to have mass only between quantiles
+#     """
+#     # TODO
+#     cdf = probs.cumsum(-1)
+#     raise NotImplementedError
 
 
 def reweight_top_p(probs, top_p):
@@ -90,7 +90,7 @@ def categorical_sample(
 
 
 class CensoredMixtureLogistic(nn.Module):
-    def __init__(self, n, res=1e-2, lo:float=-torch.inf, hi:float=torch.inf, 
+    def __init__(self, n, res:float=1e-2, lo:float=-torch.inf, hi:float=torch.inf, 
             sharp_bounds=(1e-4,2e3), init=None):
         super().__init__()
         self.n = n
@@ -124,7 +124,7 @@ class CensoredMixtureLogistic(nn.Module):
         # mixture coefficients
         log_pi = logit_pi - logit_pi.logsumexp(-1,keepdim=True)
         # location
-        loc = loc.clamp(self.lo-10*self.res, self.hi+10*self.res)
+        loc = loc.clamp(self.lo-10*self.res, self.hi+10*self.res) # type: ignore
         # sharpness
         s = F.softplus(log_s).clamp(*self.sharp_bounds)
         return log_pi, loc, s
@@ -145,8 +145,8 @@ class CensoredMixtureLogistic(nn.Module):
         sd = s*d
 
         # # censoring
-        lo_cens = x <= self.lo+d
-        hi_cens = x >= self.hi-d
+        lo_cens = x <= self.lo+d # type: ignore
+        hi_cens = x >= self.hi-d # type: ignore
         ones = torch.ones_like(s)
         zeros = torch.zeros_like(s)
 
@@ -233,7 +233,7 @@ class CensoredMixtureLogistic(nn.Module):
             # TODO: quantile truncation and temperature are after this
             # and so they aren't correct in multi-range case
             probs = [
-                (self.cdf(h, r.hi) - self.cdf(h, r.lo)) #* r.weight
+                (self.cdf(h, r.hi) - self.cdf(h, r.lo)) * r.weight
                 for r in truncate.ranges]
             idx = categorical_sample(torch.tensor(probs).log())
             truncate = truncate.ranges[idx].bounds()
@@ -302,7 +302,7 @@ class CensoredMixtureLogistic(nn.Module):
 
             x = x[idx]
             
-        x = x.clamp(self.lo, self.hi)
+        x = x.clamp(self.lo, self.hi) # type: ignore
         x = x.clamp(*truncate)
         return x[0] if unwrap else x
 
@@ -333,7 +333,7 @@ class CensoredMixturePointyBoi(nn.Module):
         # mixture coefficients
         log_pi = logit_pi - logit_pi.logsumexp(-1,keepdim=True)
         # location
-        loc = loc.clamp(self.lo-10*self.res, self.hi+10*self.res)
+        loc = loc.clamp(self.lo-10*self.res, self.hi+10*self.res) # type: ignore
         # sharpness
         # s = log_s.exp()
         # s = torch.min(F.softplus(log_s), self.max_sharp)
@@ -407,4 +407,4 @@ class CensoredMixturePointyBoi(nn.Module):
         x_ = u / (1 - u.abs())
         x = x_ / s + loc
 
-        return x.clamp(self.lo, self.hi)
+        return x.clamp(self.lo, self.hi) # type: ignore

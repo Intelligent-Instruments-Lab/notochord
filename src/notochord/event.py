@@ -42,32 +42,32 @@ class EventConstraints:
     # penalty specifies the relative importance of different constraints
     penalty:MutableMapping[Constraint,float] = field(
         default_factory=_default_penalty.copy)
+    # steering
+    pitch_temp:float = 1.0
+    rhythm_temp:float = 1.0 
+    timing_temp:float = 1.0
+    truncate_quantile_time:tuple[float,float] = (0.,1.)
+    truncate_quantile_pitch:tuple[float,float] = (0.,1.)
+    truncate_quantile_vel:tuple[float,float] = (0.,1.)
+    steer_density:float = 0.5
+    inst_weights:MutableMapping[int,float] = field(default_factory=dict)
+    # set of externally controlled instruments which may not obey constraints
+    external:set[int] = field(default_factory=set)
 
     def get(self, a:str, i:int):
+        """get from fields which may be scalar or instrument dict"""
         field = getattr(self, a)
         if isinstance(field, dict):
             return field.get(i, EventConstraints.__dataclass_fields__[a].default)
         else:
             return field
 
-    # def helper(field, i, default):
-        # if isinstance(field, dict): return field.get(i, default)
-
-@dataclass
-class EventSteering:
-    pitch_temp:float|None = None
-    rhythm_temp:float|None = None 
-    timing_temp:float|None = None
-    truncate_quantile_time:tuple[float,float]|None = None
-    truncate_quantile_pitch:tuple[float,float]|None = None
-    truncate_quantile_vel:tuple[float,float]|None = None
-    steer_density:float|None = None
-    inst_weights:MutableMapping[int,float]|None = None
 
 @dataclass
 class SupportRange:
     lo:float = -torch.inf
     hi:float = torch.inf
+    weight:float = 1.0
     # def __init__(self, lo:float=None, hi:float=None):
         # self.lo = float('-inf') if lo is None else lo
         # self.hi = float('inf') if hi is None else hi
@@ -92,7 +92,7 @@ class SupportRange:
         return self.lo, self.hi
     
     def copy(self):
-        return SupportRange(self.lo, self.hi)
+        return SupportRange(self.lo, self.hi, self.weight)
     
     def value(self):
         if self.lo==self.hi:

@@ -784,8 +784,7 @@ class Notochord(nn.Module):
           
     def constrain_dur(self, 
             event:NotochordEvent, 
-            cons:EventConstraints, 
-            external:Collection[int]
+            cons:EventConstraints
         ):
         """
         """
@@ -799,7 +798,7 @@ class Notochord(nn.Module):
         latest_event = cons.max_time or float('inf')
         for (i,p),t in self.held_notes.items():
             # don't try to end externally controlled notes
-            if i in external: continue
+            if i in cons.external: continue
             # delta = max_dur(i) - t
             delta = cons.get('max_duration', i) - t
             latest_event = min(latest_event, delta)
@@ -833,7 +832,7 @@ class Notochord(nn.Module):
         # NOTE complexity is held notes * atoms...
         # if atoms were indexed by note, it could be faster
         for (i,p),t in self.held_notes.items():
-            if i in external: continue
+            if i in cons.external: continue
             # delta = min_dur(i) - t
             delta = cons.get('min_duration', i) - t
             if delta > 10e-3:
@@ -845,8 +844,7 @@ class Notochord(nn.Module):
 
     def constrain_poly(self, 
             event:NotochordEvent, 
-            cons:EventConstraints, 
-            external:Collection[int]
+            cons:EventConstraints
         ):
         """
         apply polyphony constraints to the Support.
@@ -870,7 +868,7 @@ class Notochord(nn.Module):
 
         # TODO: external instruments must be excluded, otherwise it will
         # get stuck waiting whenever external polyphony is outside constraints
-        insts = event.support.marginal_inst() - set(external)
+        insts = event.support.marginal_inst() - cons.external
 
         for i in insts:
             # if poly[i] > max_poly(i):
@@ -904,48 +902,60 @@ class Notochord(nn.Module):
             modality:str,
             ctx:torch.Tensor, 
             event:NotochordEvent, 
-            steer:EventSteering,
-            external:Collection[int]
+            cons:EventConstraints
         ):
         params = self.projection(modality)(ctx.tanh())
 
         no_steer = (
             event.inst is not None 
-            and event.inst in external)
-        tqp = None if no_steer else steer.truncate_quantile_pitch 
-        tqv = None if no_steer else steer.truncate_quantile_vel 
-        tqt = None if no_steer else steer.truncate_quantile_time 
-
+            and event.inst in cons.external)
         if modality=='i':
             # apply instrument weights
-            if steer.inst_weights is not None:
-                for i, w in steer.inst_weights.items():
+            if cons.inst_weights is not None:
+                for i, w in cons.inst_weights.items():
                     params[...,i] += math.log(w)
             return categorical_sample(
                 params, 
                 whitelist=event.support.marginal_inst(),
                 )
         elif modality=='p':
-            tqp = steer.truncate_quantile_pitch if no_steer else None
+            is_drum = (
+                event.inst is not None 
+                and self.is_drum(event.inst))
+            tqp = (
+                None if no_steer or is_drum
+                else cons.truncate_quantile_pitch)
             return categorical_sample(
                 params, 
                 whitelist=event.support.marginal_pitch(),
-                top_p=steer.pitch_temp,
+                top_p=cons.pitch_temp,
                 truncate_quantile=tqp
                 )
         elif modality=='t':
+            tqt = None if no_steer else cons.truncate_quantile_time 
             return self.time_dist.sample(
                 params,
                 truncate=event.support.marginal_time(),
                 truncate_quantile=tqt,
-                weight_top_p=steer.rhythm_temp,
-                component_temp=steer.timing_temp,
+                weight_top_p=cons.rhythm_temp,
+                component_temp=cons.timing_temp,
             )
         elif modality=='v':
-            # TODO: steer_density
+            # steer_density
+            w_on = (
+                1 if cons.steer_density is None 
+                else 2**(cons.steer_density*2-1))
+            w_off = 1/w_on
+            vs = event.support.marginal_vel()
+            for r in vs.ranges:
+                if r.hi <= 0.5:
+                    r.weight = w_off
+                elif r.lo >= 0.5:
+                    r.weight = w_on
+            tqv = None if no_steer else cons.truncate_quantile_vel 
             return self.vel_dist.sample(
                 params,
-                truncate=event.support.marginal_vel(),
+                truncate=vs,
                 truncate_quantile=tqv
             ).round()
         else:
@@ -953,8 +963,6 @@ class Notochord(nn.Module):
 
     def query_neo(self, 
             cons:EventConstraints, 
-            steer:EventSteering, 
-            external:Collection[int],
             order:str='vtip'
         ):
         """
@@ -971,13 +979,13 @@ class Notochord(nn.Module):
             return event
         # print('after init: ', event.support)
         
-        self.constrain_dur(event, cons, external)
+        self.constrain_dur(event, cons)
         event.autoset()
         if event.is_complete(): 
             return event
         # print('after dur: ', event.support)
         
-        self.constrain_poly(event, cons, external)
+        self.constrain_poly(event, cons)
         event.autoset()
 
         if event.support.empty():
@@ -1029,7 +1037,7 @@ class Notochord(nn.Module):
 
                 if value is None:
                     # sample next modality
-                    value = self._sample(m, ctx, event, steer, external)
+                    value = self._sample(m, ctx, event, cons)
                     # print(f'set {m=} {value=}')
                     event.set(m, value.item())
                     event.autoset()
@@ -1139,8 +1147,7 @@ class Notochord(nn.Module):
             min_polyphony=min_polyphony,
             max_polyphony=max_polyphony,
             min_duration=min_duration,
-            max_duration=max_duration)
-        steer_kw = dict(
+            max_duration=max_duration,
             pitch_temp=pitch_temp,
             rhythm_temp=rhythm_temp,
             timing_temp=timing_temp,
@@ -1148,11 +1155,13 @@ class Notochord(nn.Module):
             truncate_quantile_pitch=truncate_quantile_pitch,
             truncate_quantile_vel=truncate_quantile_vel,
             steer_density=steer_density,
-            inst_weights=inst_weights)
+            inst_weights=inst_weights,
+            external=no_steer or set()
+            )
         event = self.query_neo(
-            EventConstraints(**{k:v for k,v in cons_kw.items() if v is not None}), # type: ignore
-            EventSteering(**{k:v for k,v in steer_kw.items() if v is not None}), # type: ignore
-            no_steer or set(),
+            EventConstraints(**{
+                k:v for k,v in cons_kw.items() if v is not None
+                }), # type: ignore
             'vtip'
         )
         return {
@@ -1440,8 +1449,7 @@ class Notochord(nn.Module):
             min_polyphony=min_polyphony,
             max_polyphony=max_polyphony,
             min_duration=min_duration,
-            max_duration=max_duration)
-        steer_kw = dict(
+            max_duration=max_duration,
             pitch_temp=pitch_temp,
             rhythm_temp=rhythm_temp,
             timing_temp=timing_temp,
@@ -1449,11 +1457,12 @@ class Notochord(nn.Module):
             truncate_quantile_pitch=truncate_quantile_pitch,
             truncate_quantile_vel=truncate_quantile_vel,
             steer_density=steer_density,
-            inst_weights=inst_weights)
+            inst_weights=inst_weights,
+            external=no_steer)
         event = self.query_neo(
-            EventConstraints(**{k:v for k,v in cons_kw.items() if v is not None}), # type: ignore
-            EventSteering(**{k:v for k,v in steer_kw.items() if v is not None}), # type: ignore
-            no_steer or set(),
+            EventConstraints(**{
+                k:v for k,v in cons_kw.items() if v is not None
+                }), # type: ignore
             'vipt'
         )
         return {
