@@ -8,6 +8,7 @@ import json
 import copy
 import traceback
 import time
+import random
 
 import mido
 from tqdm import tqdm
@@ -916,7 +917,10 @@ class Notochord(nn.Module):
         tqt = None if no_steer else steer.truncate_quantile_time 
 
         if modality=='i':
-            # TODO: apply instrument weights
+            # apply instrument weights
+            if steer.inst_weights is not None:
+                for i, w in steer.inst_weights.items():
+                    params[...,i] += math.log(w)
             return categorical_sample(
                 params, 
                 whitelist=event.support.marginal_inst(),
@@ -951,14 +955,14 @@ class Notochord(nn.Module):
             cons:EventConstraints, 
             steer:EventSteering, 
             external:Collection[int],
-            order='vtip'
+            order:str='vtip'
         ):
         """
         """
-
-        if order is None:
-
-            pass#TODO
+        if order=='random':
+            order_ = list('iptv')
+            random.shuffle(order_)
+            order = ''.join(order_)
 
         # t = time.time_ns()
         event = self.init_event(cons)
@@ -985,6 +989,7 @@ class Notochord(nn.Module):
         event.support.stratify()
         event.autoset()
 
+
         # cons_t = round((time.time_ns() - t)*1e-6)
         # print(f'{cons_t=}ms')
 
@@ -994,15 +999,22 @@ class Notochord(nn.Module):
         # whatever atom is sample from *must* remain valid, right?
 
         processed = ''
-        def next_modality():
-            fixed, unfixed = '', ''
-            for m in order:
-                if m not in processed:
-                    if event.modality(m) is None:
-                        unfixed += m
-                    else:
-                        fixed += m
-            return (fixed + unfixed)[0]
+        if order=='auto':
+            # hmmm....
+            # it should be possible to check the prob.mass of support
+            # for each modality and pick the smallest one??
+            # not free, it requires more projections
+            raise NotImplementedError
+        else:
+            def next_modality():
+                fixed, unfixed = '', ''
+                for m in order:
+                    if m not in processed:
+                        if event.modality(m) is None:
+                            unfixed += m
+                        else:
+                            fixed += m
+                return (fixed + unfixed)[0]
 
         with torch.inference_mode():
             if self.h_query is None:
