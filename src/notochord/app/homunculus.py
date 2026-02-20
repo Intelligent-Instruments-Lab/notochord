@@ -707,10 +707,10 @@ def main(
         def reset(self):
             self.stopped = False
             self.last_event_time = None
-            self.lateness = 0
+            self.lateness = 0.0
             # self.on_cum_end_prob = 0
             # self.off_cum_end_prob = 0
-            self.cum_end_prob = 0
+            self.cum_end_prob = 0.0
             self.clear()
         def clear(self):
             self.event = None
