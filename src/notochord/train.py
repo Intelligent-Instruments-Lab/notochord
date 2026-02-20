@@ -340,7 +340,8 @@ class Resumable:
                 otherwise, restore only model weights (for transfer learning)
         """
         if checkpoint is not None:
-            d = torch.load(checkpoint, map_location=torch.device('cpu'))
+            d = torch.load(
+                checkpoint, map_location=torch.device('cpu'), weights_only=False)
             print(f'loaded checkpoint {checkpoint}')
             if d['kw'].get('batch_len_schedule') is not None: print("""
             warning: checkpoints don't track `batch_len`. 

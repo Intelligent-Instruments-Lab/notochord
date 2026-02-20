@@ -3,6 +3,7 @@ from multiprocessing import Pool
 import functools as ft
 import itertools as it
 from collections import defaultdict
+import traceback
 
 from tqdm import tqdm
 import fire
@@ -21,18 +22,25 @@ def time_collision(p1, p2):
     return True
     
 def note_collision(p1, p2):
-    parts = {1:p1, 2:p2}
+    """return True if p1 and p2 have any overlapping notes"""
+    # first check if they are disjoint in both time and pitch, for speed:
     if not pitch_collision(p1, p2):
         # print('early out: pitch')
         return False
     if not time_collision(p1, p2):
         # print('early out: time')
         return False
+    # sort events by time
     events = [
-        *zip(p1['events']['time'], p1['events']['vel'], p1['events']['pitch'], it.repeat(1)),
-        *zip(p2['events']['time'], p2['events']['vel'], p2['events']['pitch'], it.repeat(2))]
+        *zip(
+            p1['events']['time'], p1['events']['vel'], 
+            p1['events']['pitch'], it.repeat(1)),
+        *zip(
+            p2['events']['time'], p2['events']['vel'], 
+            p2['events']['pitch'], it.repeat(2))]
     events.sort()
     # print(events)
+    # simulate playing the two parts to check for a note collision
     held = {1:set(), 2:set()}
     for (t,v,p,part) in events:
         if v > 0:
@@ -44,7 +52,11 @@ def note_collision(p1, p2):
     return False
         
 def repair_events(part):
-    events = zip(part['events']['time'], part['events']['vel'], part['events']['pitch'])
+    """add missing NoteOffs before a double NoteOn; eliminate double NoteOffs"""
+    events = zip(
+        part['events']['time'], 
+        part['events']['vel'], 
+        part['events']['pitch'])
     i = part['inst']
     new_events = []
     # held = defaultdict(int)
@@ -68,11 +80,11 @@ def repair_events(part):
                 # delete extra note-offs
                 n_double_off += 1
                 # print(f'double note off: part {part["part"]} pitch {p} time {t}')
+    new_events.sort()
     # if n_double_off:
     #     print(f'double note off: part {part["part"]} count {n_double_off}')
     # if n_double_on:
     #     print(f'double note on: part {part["part"]} count {n_double_on}')
-    new_events.sort()
     return new_events
 
 # number of channels with no program change
@@ -94,6 +106,7 @@ def process(fnames):
         mid = mido.MidiFile(f)
     except Exception:
         tqdm.write(f'error opening {f}')
+        # traceback.print_exc()
         return
 
     if mid.type==2:
@@ -236,6 +249,7 @@ def process(fnames):
 
     events = sum(complete_parts, start=[])
 
+    # skip files with very few events
     if len(events) < 64:
         return
 
@@ -250,7 +264,7 @@ def process(fnames):
     ), g.with_suffix('.pkl'))
 
 
-def main(data_path, dest_path, n_jobs=4, n_files=None):
+def main(data_path:str, dest_path:str, n_jobs:int=4, n_files:int=None):
     data_dir = Path(data_path)
     files = list(data_dir.glob('**/*.mid'))
     files_out = [
