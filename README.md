@@ -60,7 +60,7 @@ Development is now focused on `homunculus`, which is intended to subsume all fea
 
 ## Python API
 
-See the docs for [`Notochord.feed`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.feed) and [`Notochord.query`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.query) for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
+See the docs for [`Notochord.feed`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.feed) and [`Notochord.sample`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.sample) for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
 
 ## OSC server
 
@@ -92,12 +92,20 @@ In Supercollider, step through `examples/notochord/tidalcycles/tidal-notochord-d
 
 ## Train your own Notochord model (GPU recommended)
 
+Selec the `train` option when installing:
+```
+pip install notochord[train]
+```
+
 preprocess the data:
 ```
-python notochord/scripts/lakh_prep.py --data_path /path/to/midi/files --dest_path /path/to/data/storage
+notochord prep --data_path /path/to/midi/files --dest_path /path/to/data/storage
 ```
 launch a training job:
 ```
-python notochord/train.py --data_dir /path/to/data/storage --log_dir /path/for/tensorboard/logs --model_dir /path/for/checkpoints --results_dir /path/for/other/logs train
+notochord train --data_dir /path/to/data/storage --log_dir /path/for/tensorboard/logs --model_dir /path/for/checkpoints --results_dir /path/for/other/logs
 ```
-progress can be monitored via tensorboard.
+progress can be monitored via tensorboard:
+```
+tensorboard --logdir /path/for/tensorboard/logs
+```

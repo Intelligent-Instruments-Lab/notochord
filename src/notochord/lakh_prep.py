@@ -80,7 +80,7 @@ def repair_events(part):
                 # delete extra note-offs
                 n_double_off += 1
                 # print(f'double note off: part {part["part"]} pitch {p} time {t}')
-    new_events.sort()
+    new_events.sort() # this should already be sorted no?
     # if n_double_off:
     #     print(f'double note off: part {part["part"]} count {n_double_off}')
     # if n_double_on:
