@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.tensorboard.writer import SummaryWriter
-torch.multiprocessing.set_sharing_strategy('file_system')
+# torch.multiprocessing.set_sharing_strategy('file_system')
 
 from notochord import Notochord, MIDIDataset, TxalaDataset
 from notochord.util import deep_update, get_class_defaults, gen_masks
