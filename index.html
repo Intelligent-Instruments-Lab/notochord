@@ -1560,7 +1560,7 @@
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>brew install fluidsynth
 </span></code></pre></div>
 fluidsynth needs a SoundFont to run, like <a href="https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view">this one (Google Drive link)</a>.</p>
-<p>You can run fluidsynth in a terminal, supplying the path to your SoundFont. For example, <code>fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres\ of\ Heaven\ (XGM)\ 4.00(G).sf2'</code></p>
+<p>You can run fluidsynth in a terminal, supplying the path to your SoundFont. For example, <code>fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'</code></p>
 <h3 id="without-uv">without uv</h3>
 <p>Using your python environment manager of choice (e.g. virtualenv, conda), make a new environment with a Python version between 3.10-3.13. Then <code>pip install notochord</code>.</p>
 <h3 id="developing">developing</h3>
@@ -1609,11 +1609,15 @@ this will run notochord and listen continously for OSC messages.</p>
 <h2 id="train-your-own-notochord-model-gpu-recommended">Train your own Notochord model (GPU recommended)</h2>
 <p>Select the <code>train</code> option when installing, e.g. <code>uv tool install notochord[train]</code>. </p>
 <h3 id="preprocess-data">preprocess data</h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>notochord<span class="w"> </span>prep<span class="w"> </span>--data_path<span class="w"> </span>/path/to/midi/files<span class="w"> </span>--dest_path<span class="w"> </span>/path/to/data/storage
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>notochord<span class="w"> </span>prep<span class="w"> </span>--data_path<span class="w"> </span>/path/to/midi/files<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>--dest_path<span class="w"> </span>/path/to/data/storage
 </span></code></pre></div>
 <p>This will process all MIDI files under a directory, converting them to torch tensors which notochord can train on. The built-in preprocessing assumes a dataset of General MIDI files, like the <a href="https://colinraffel.com/projects/lmd/">Lakh MIDI dataset</a>. If you use your own MIDI files, you likely want to label parts using MIDI program change messages (different instruments for each channel). Only ProgramChange, NoteOn and NoteOff events are processed by notochord.</p>
 <h3 id="launch-a-training-job">launch a training job</h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>notochord<span class="w"> </span>train<span class="w"> </span>my-model<span class="w"> </span>--data_dir<span class="w"> </span>/path/to/data/storage<span class="w"> </span>--log_dir<span class="w"> </span>/path/for/tensorboard/logs<span class="w"> </span>--model_dir<span class="w"> </span>/path/for/checkpoints<span class="w"> </span>--results_dir<span class="w"> </span>/path/for/other/logs
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>notochord<span class="w"> </span>train<span class="w"> </span>my-model<span class="w"> </span>--data_dir<span class="w"> </span>/path/to/data/storage<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>--log_dir<span class="w"> </span>/path/for/tensorboard/logs<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>--model_dir<span class="w"> </span>/path/for/checkpoints<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>--results_dir<span class="w"> </span>/path/for/other/logs
 </span></code></pre></div>
 <p>The above will train a new notochord model from scratch. By adding the <code>--model</code> argument, you can set model hyperparameters (as documented in <a href="https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.__init__"><code>Notochord.__init__</code></a>). For example, <code>--model '{rnn_hidden:512, rnn_layers:1, mlp_layers:1}'</code> would train a smaller model than the default.</p>
 <p>If using your own dataset, you may want to turn off data augmentation options with <code>--aug-speed 0</code>, <code>--aug-transpose 0</code> or <code>--aug-remap False</code>.</p>
