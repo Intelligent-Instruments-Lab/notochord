@@ -16,15 +16,6 @@ Notochord is a neural network model for MIDI performances. This package contains
 
 We recommend using [uv](https://docs.astral.sh/uv/) to run notochord, install it as a tool, or create a project incorporating it.
 
-### Install fluidsynth (optional)
-[fluidsynth](https://github.com/FluidSynth/fluidsynth) is a General MIDI synthesizer which you can install from the package manager. On macOS:
-```
-brew install fluidsynth
-```
-fluidsynth needs a soundfont to run, like this one: https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view
-
-You can run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
-
 ### try out the homunculus MIDI app right now
 ```bash
 uvx notochord homunculus
@@ -43,6 +34,15 @@ cd my-project
 uv add notochord
 .venv/bin/python -m notochord --help
 ```
+
+### Install fluidsynth (optional)
+[fluidsynth](https://github.com/FluidSynth/fluidsynth) is a General MIDI synthesizer which you can install from the package manager. On macOS:
+```
+brew install fluidsynth
+```
+fluidsynth needs a SoundFont to run, like [this one (Google Drive link)](https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view).
+
+You can run fluidsynth in a terminal, supplying the path to your SoundFont. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres\ of\ Heaven\ (XGM)\ 4.00(G).sf2'`
 
 ### without uv
 
