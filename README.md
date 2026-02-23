@@ -121,14 +121,18 @@ Select the `train` option when installing, e.g. `uv tool install notochord[train
 
 ### preprocess data
 ```bash
-notochord prep --data_path /path/to/midi/files --dest_path /path/to/data/storage
+notochord prep --data_path /path/to/midi/files \
+--dest_path /path/to/data/storage
 ```
 
 This will process all MIDI files under a directory, converting them to torch tensors which notochord can train on. The built-in preprocessing assumes a dataset of General MIDI files, like the [Lakh MIDI dataset](https://colinraffel.com/projects/lmd/). If you use your own MIDI files, you likely want to label parts using MIDI program change messages (different instruments for each channel). Only ProgramChange, NoteOn and NoteOff events are processed by notochord.
 
 ### launch a training job
 ```bash
-notochord train my-model --data_dir /path/to/data/storage --log_dir /path/for/tensorboard/logs --model_dir /path/for/checkpoints --results_dir /path/for/other/logs
+notochord train my-model --data_dir /path/to/data/storage \
+--log_dir /path/for/tensorboard/logs \
+--model_dir /path/for/checkpoints \
+--results_dir /path/for/other/logs
 ```
 
 The above will train a new notochord model from scratch. By adding the `--model` argument, you can set model hyperparameters (as documented in [`Notochord.__init__`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.__init__)). For example, `--model '{rnn_hidden:512, rnn_layers:1, mlp_layers:1}'` would train a smaller model than the default.
