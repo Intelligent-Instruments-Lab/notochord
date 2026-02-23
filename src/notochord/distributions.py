@@ -16,6 +16,7 @@ from .event import SupportMultiRange
 #     raise NotImplementedError
 
 
+# @torch.compile
 def reweight_top_p(probs, top_p):
     """
     given tensor of probabilities, apply top p / "nucleus" filtering,
@@ -37,6 +38,16 @@ def reweight_top_p(probs, top_p):
     weighted_probs = torch.zeros_like(probs).where(to_zero, probs)
     return weighted_probs / weighted_probs.sum(-1, keepdim=True)
 
+# @torch.compile(fullgraph=True, dynamic=False)
+def do_truncate_quantile(probs, q_lo, q_hi):
+    zero = torch.zeros_like(probs)
+    zcs = (1-probs.flip(-1).cumsum(-1).flip(-1))
+    cs = probs.cumsum(-1)
+    # truncate up to q_lo
+    probs -= (q_lo-zcs).clip(zero, probs)
+    # truncate from q_hi
+    probs -= (cs-q_hi).clip(zero, probs)
+    return probs
 
 def categorical_sample(
         logits, whitelist=None, index=None, top_p=None, 
@@ -73,14 +84,7 @@ def categorical_sample(
         q_lo, q_hi = truncate_quantile
         q_lo = max(0., 0. if q_lo is None else q_lo)
         q_hi = min(1., 1. if q_hi is None else q_hi)
-        # print(q_lo, q_hi)
-        zero = torch.zeros_like(probs)
-        zcs = (1-probs.flip(-1).cumsum(-1).flip(-1))
-        cs = probs.cumsum(-1)
-        # truncate up to q_lo
-        probs -= (q_lo-zcs).clip(zero, probs)
-        # truncate from q_hi
-        probs -= (cs-q_hi).clip(zero, probs)
+        probs = do_truncate_quantile(probs, q_lo, q_hi)
 
     # if probs.isnan().any():
         # raise Exception('trunc quant '+str(probs))

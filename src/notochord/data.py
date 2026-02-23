@@ -5,7 +5,6 @@ from tqdm import tqdm
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-torch.multiprocessing.set_sharing_strategy('file_system')
 
 class MIDIDataset(Dataset):
     def __init__(self, data_dir, batch_len, 

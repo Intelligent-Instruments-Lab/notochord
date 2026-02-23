@@ -25,37 +25,74 @@ from notochord.util import deep_update, get_class_defaults, gen_masks
 
 class Trainer:
     def __init__(self, 
-        experiment, # experiment name
-        model_dir,
-        log_dir,
-        data_dir,
-        results_dir,
-        model = None, # dict of model constructor overrides
-        batch_size = 128,
-        batch_len = 64,
-        batch_len_schedule = None,
-        batch_len_max = 512,
-        lr = 3e-4,
-        adam_betas = (0.9, 0.999),
-        adam_eps = 1e-08, 
-        weight_decay = 0.01,
-        grad_clip = 1.0,
-        seed = 0, # random seed
-        n_jobs = 1, # for dataloaders
-        device = 'cpu', # 'cuda:0'
-        epoch_size = None, # in iterations, None for whole dataset
-        valid_size = None, # samples w replacement, None for once through
-        txala = False,
-        txala_remap = False,
-        txala_permute = False,
-        min_valid = 8,
-        min_test = 8,
-        aug_speed = 0.1,
-        aug_transpose = 5,
-        aug_remap = True,
-        freeze_rnn = False,
+        experiment:str, # experiment name
+        model_dir:str|Path,
+        log_dir:str|Path,
+        data_dir:str|Path,
+        results_dir:str|Path,
+        model:str|dict = None, # dict of model constructor overrides
+        batch_size:int = 128,
+        batch_len:int = 64,
+        batch_len_schedule:int|None = None,
+        batch_len_max:int = 512,
+        lr:float = 3e-4,
+        adam_betas:tuple[float,float] = (0.9, 0.999),
+        adam_eps:float = 1e-08, 
+        weight_decay:float = 0.01,
+        grad_clip:float = 1.0,
+        seed:int = 0, # random seed
+        n_jobs:int = 1, # for dataloaders
+        device:str|torch.device = 'cpu', # 'cuda:0'
+        epoch_size:int|None = None, # in iterations, None for whole dataset
+        valid_size:int|None = None, # samples w replacement, None for once through
+        min_valid:int = 8,
+        min_test:int = 8,
+        aug_speed:float = 0.1,
+        aug_transpose:int = 5,
+        aug_remap:bool = True,
+        freeze_rnn:bool = False,
+        txala:bool = False,
+        txala_remap:bool = False,
+        txala_permute:bool = False,
         ):
-        """TODO: Trainer __init__ docstring"""
+        """
+        Args:
+            experiment: name for the training run
+            model_dir: directory for model checkpoint storage
+            log_dir: directory for tensorboard checkpoint storage
+            data_dir: directory containing preprocessed output of `notochord prep`
+            results_dir: directory for additional logs/outputs
+            model: string which is parsed as a dict and passed to Notochord.__init__
+            batch_size: number of MIDI files sampled per training batch
+            batch_len: initial number of MIDI events per training example
+            batch_len_schedule: amount to increment bath_len each training epoch
+            batch_len_max: cap on batch_len
+            lr: learning rate
+            adam_betas: momentum parameters for AdamW optimizer
+            adam_eps: epsilon parameter for AdamW optimizer 
+            weight_decay: regularization parameter for AdamW optimizer
+            grad_clip: argument to torch.nn.utils.clip_grad_norm_
+            seed: random seed for model initialization
+            n_jobs: number of dataloader processes
+            device: training device, e.g. 'cuda:0', 'mps'
+            epoch_size: if supplied, start a new epoch after this many iterations, 
+                instead of one pass through the training dataset
+            valid_size: if supplied, run validation for this many batches, 
+                instead of one pass through the validation split 
+            min_valid: mininum validation split size (for small datasets)
+            min_test: minimum test split size (for small datasets)
+            aug_speed: amount to randomly change speed of training examples 
+                aug_speed=0.5 would vary speed between 2x and 2/3x
+            aug_transpose: semitones to randomly transpose pitches up or down
+            aug_remap: if True, randomly map known instruments to anonymous ones
+            freeze_rnn: if True, freeze RNN model parameters;
+                only embeddings and prediction heads will be learned.
+            txala: use the special DataLoader for training the txalaparta model
+            txala_remap: data augmentation option for txalaparta training
+                (remaps MIDI programs, i.e. swaps players and hands)
+            txala_permute: data augmentation option for txalaparta training
+                (permutes MIDI pitches, i.e. planks)
+        """
         kw = locals(); kw.pop('self')
 
         # store all hyperparams for checkpointing

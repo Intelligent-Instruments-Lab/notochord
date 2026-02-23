@@ -14,9 +14,7 @@ Notochord is a neural network model for MIDI performances. This package contains
 
 ## Getting Started
 
-Using your python environment manager of choice (e.g. virtualenv, [conda](https://github.com/conda-forge/miniforge)), make a new environment with a Python version at least 3.10. Then `pip install notochord`.
-
-For developing `notochord`, see our [dev repo](https://github.com/Intelligent-Instruments-Lab/iil-dev.git)
+We recommend using [uv](https://docs.astral.sh/uv/) to run notochord, install it as a tool, or create a project incorporating it.
 
 ### Install fluidsynth (optional)
 [fluidsynth](https://github.com/FluidSynth/fluidsynth) is a General MIDI synthesizer which you can install from the package manager. On macOS:
@@ -26,6 +24,33 @@ brew install fluidsynth
 fluidsynth needs a soundfont to run, like this one: https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view
 
 You can run fluidsynth in a terminal. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
+
+### try out the homunculus MIDI app right now
+```bash
+uvx notochord homunculus
+```
+
+### persistently install notochord
+```bash
+uv tool install notochord
+notochord --help
+```
+
+### create a Python project using notochord
+```bash
+uv init my-project
+cd my-project
+uv add notochord
+.venv/bin/python -m notochord --help
+```
+
+### without uv
+
+Using your python environment manager of choice (e.g. virtualenv, conda), make a new environment with a Python version between 3.10-3.13. Then `pip install notochord`.
+
+### developing
+
+For developing `notochord`, see our [dev repo](https://github.com/Intelligent-Instruments-Lab/iil-dev.git)
 
 ## Notochord Homunculus
 
@@ -60,7 +85,7 @@ Development is now focused on `homunculus`, which is intended to subsume all fea
 
 ## Python API
 
-See the docs for [`Notochord.feed`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.feed) and [`Notochord.sample`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.sample) for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
+See the docs for [`Notochord.reset`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.reset), [`Notochord.feed`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.feed) and [`Notochord.sample`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.sample) (or older [`Notochord.query`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.sample)) for the low-level Notochord inference API which can be used from Python code. `notochord/app/simple_harmonizer.py` provides a minimal example of how to build an interactive app.
 
 ## OSC server
 
@@ -92,20 +117,38 @@ In Supercollider, step through `examples/notochord/tidalcycles/tidal-notochord-d
 
 ## Train your own Notochord model (GPU recommended)
 
-Selec the `train` option when installing:
-```
-pip install notochord[train]
-```
+Select the `train` option when installing, e.g. `uv tool install notochord[train]`. 
 
-preprocess the data:
-```
+### preprocess data
+```bash
 notochord prep --data_path /path/to/midi/files --dest_path /path/to/data/storage
 ```
-launch a training job:
+
+This will process all MIDI files under a directory, converting them to torch tensors which notochord can train on. The built-in preprocessing assumes a dataset of General MIDI files, like the [Lakh MIDI dataset](https://colinraffel.com/projects/lmd/). If you use your own MIDI files, you likely want to label parts using MIDI program change messages (different instruments for each channel). Only ProgramChange, NoteOn and NoteOff events are processed by notochord.
+
+### launch a training job
+```bash
+notochord train my-model --data_dir /path/to/data/storage --log_dir /path/for/tensorboard/logs --model_dir /path/for/checkpoints --results_dir /path/for/other/logs
 ```
-notochord train --data_dir /path/to/data/storage --log_dir /path/for/tensorboard/logs --model_dir /path/for/checkpoints --results_dir /path/for/other/logs
-```
-progress can be monitored via tensorboard:
-```
+
+The above will train a new notochord model from scratch. By adding the `--model` argument, you can set model hyperparameters (as documented in [`Notochord.__init__`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/model/#notochord.model.Notochord.__init__)). For example, `--model '{rnn_hidden:512, rnn_layers:1, mlp_layers:1}'` would train a smaller model than the default.
+
+If using your own dataset, you may want to turn off data augmentation options with `--aug-speed 0`, `--aug-transpose 0` or `--aug-remap False`.
+
+Training progress can be monitored via tensorboard:
+```bash
 tensorboard --logdir /path/for/tensorboard/logs
 ```
+
+The most important value is `valid/loss`. As long as it decreases, the model should continue to improve. Training will continue until the job is killed with ctrl+C.
+
+### resuming and fine-tuning
+
+You can resume training from an existing checkpoint by adding `--resume --checkpoint /path/to/model/checkpoint`. It is also possible to initialize training from a checkpoint without carrying over optimizer states etc from the original training, by leaving out the `--resume` flag. For fine-tuning on small datasets, consider adding `--freeze-rnn`. Training options are documented under [`Trainer.__init__`](https://intelligent-instruments-lab.github.io/notochord/reference/notochord/train/#notochord.train.Trainer.__init__)
+
+To fine the latest base notochord model, you can run `notochord homunculus` at least once to download it, then use `notochord files` to find the downloaded model.
+
+
+### use your custom model
+
+You can load a custom model in the Python API using `Notchord.from_checkpoint` or use it with homunculus using e.g. `notochord homunculus --checkpoint /path/for/checkpoints/my-model/XXX.ckpt`

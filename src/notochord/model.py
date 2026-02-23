@@ -165,17 +165,41 @@ class GLUMLP(nn.Module):
 class Notochord(nn.Module):
     # note: use named arguments only for benefit of training script
     def __init__(self, 
-            emb_size=256, 
-            rnn_hidden=2048, rnn_layers=1, kind='gru', 
-            mlp_layers=0,
-            dropout=0.1, norm=None,
-            num_pitches=128, 
-            num_instruments=320,
-            time_sines=128, vel_sines=128,
-            time_bounds=(0,10), time_components=32, time_res=1e-2,
-            vel_components=16
+            emb_size:int=512, 
+            rnn_hidden:int=1024, 
+            rnn_layers:int=2, 
+            kind:str='gru', 
+            mlp_layers:int=2,
+            dropout:float=0.1,
+            norm:str='layer',
+            num_pitches:int=128, 
+            num_instruments:int=320,
+            time_sines:int=128, 
+            vel_sines:int=128,
+            time_bounds:tuple[float, float]=(0.,10.), 
+            time_components:int=32, 
+            time_res:float=1e-2,
+            vel_components:int=16
             ):
         """
+        Args:
+            emb_size: Embedding dimension and size parameter for most layers
+            rnn_hidden: size parameter for the backbone RNN
+            rnn_layers: number of layers in backbone RNN
+            kind: type of backbone RNN ('gru', 'lstm' or 'elman')
+            mlp_layers: layers in each prediction head plus shared projection
+            dropout: dropout probability during training
+            norm: normalization layer type ('layer' or None)
+            num_pitches: number of discrete pitches (leave at 128 for MIDI)
+            num_instruments: number of discrete instruments 
+                default is 128 melodic + 128 drums + 32 anon mel + 32 anon drum 
+                don't change this unless you know what you are doing.
+            time_sines: number of sinusoids in time embedding
+            vel_sines: number of sinusoids in velocity embedding
+            time_bounds: min and max inter-event time
+            time_components: number of mixture components in time likelihood
+            time_res: resolution parameter for discretized time likelihood
+            vel_components: number of mixture components in velocity likelihood
         """
         super().__init__()
 
@@ -511,7 +535,7 @@ class Notochord(nn.Module):
             time: float. elapsed time in seconds since previous event.
             vel: float. (possibly dequantized) MIDI velocity from 0-127 inclusive.
                 0 indicates a note-off event
-            **kw: ignored (allows doing e.g. noto.feed(**noto.query(...)))
+            **kw: ignored (allows doing e.g. noto.feed(**noto.sample(...)))
         """
         # print(f'FEED from {threading.get_ident()}') 
         # print('feed', inst, pitch, time, vel)
