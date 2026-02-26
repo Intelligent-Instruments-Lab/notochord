@@ -42,7 +42,7 @@ brew install fluidsynth
 ```
 fluidsynth needs a SoundFont to run, like [this one (Google Drive link)](https://drive.google.com/file/d/1-cwBWZIYYTxFwzcWFaoGA7Kjx5SEjVAa/view).
 
-You can run fluidsynth in a terminal, supplying the path to your SoundFont. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres\ of\ Heaven\ (XGM)\ 4.00(G).sf2'`
+You can run fluidsynth in a terminal, supplying the path to your SoundFont. For example, `fluidsynth -v -o midi.portname="fluidsynth" -o synth.midi-bank-select=mma ~/'Downloads/soundfonts/Timbres of Heaven (XGM) 4.00(G).sf2'`
 
 ### without uv
 

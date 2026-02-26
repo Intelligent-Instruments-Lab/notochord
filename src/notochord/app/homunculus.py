@@ -1,6 +1,130 @@
 """
-Notochord MIDI co-improviser server.
-Notochord plays different instruments along with the player.
+This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. It allows combining both 'harmonizer' and 'improviser' features.
+     
+Arguments to main can be given on the command line as flags, for example:
+
+`notochord homunculus --config "{1:{mode:auto, inst:1, mute:False}}" --initial-query --max-time 1`
+
+This says: play the grand piano autonomously on channel 1, start automatically, allow no more than 1 second between MIDI events. A different example:
+
+`notochord homunculus --config "{1:{mode:input, inst:1, mute:False}, 2:{mode:follow, inst:12, mute:False}}" --thru --send-pc`
+
+This says, take grand piano input on channel 1, and harmonize it with vibraphone on channel 2. Pass input through to the output, and also send program change messages to set the instruments on the synthesizer.
+
+You may also need to use the `--midi-in` or `--midi-out` flags to get MIDI to the right place.
+
+See the `main` function below for all available arguments.
+
+# MIDI Channels
+
+In homunculus, you have 16 MIDI channels. Each channel can be in one of three modes:
+
+- input (appearing like "-->01"), channel 1 comes from MIDI input channel 1.
+- follow (appearing like "01->02"), channel 2 plays whenever channel 1 plays.
+- auto (appearing like just "03"), channel 3 plays autonomously.
+
+Click the top section of each channel strip to cycle the mode.
+
+Each channel is also assigned a [General MIDI instrument](https://en.wikipedia.org/wiki/General_MIDI#Program_change_events). Each 'input' and 'auto' channel should have a unique General MIDI instrument, but 'follow' channels can be duplicates of others. If you try to assign duplicate instruments, they will automatically change to "anonymous" melodic or drum instruments, but still send the right program change messages when using --send-pc.
+
+Click the middle section of each channel strip to choose a new instrument.
+
+The bottom section of each channel strip allows muting individual voices.
+
+# Global controls
+
+Along the bottom, there are global query, sustain, mute and reset buttons. Query manually replaces the next pending note. Sustain stops all auto voices from playing without ending any open notes. Mute ends all open notes and stops auto voices. Reset ends all open notes, forgets all context and sets the Notochord model to its initial state.
+
+# homunculus.toml
+
+if you run `notochord files` in the terminal you can find the location of the `homunculus.toml` file, where you can make detailed configurations of channels, presets, and remote controls. Many of the arguments to `main` can be specified at the channel- or preset-level.
+
+## Channel defaults
+
+in the `[default]` section, you can set the default channel properties which are used unless overridden by a preset.
+
+```toml
+[default]
+mode = 'auto'
+mute = false
+punch_in = true # channels go temporarily to input mode as MIDI is received
+duration = [0.01, 5] # note duration between 10ms and 5 seconds
+```
+
+## Presets
+
+Use a `[[preset]]` block to add a preset, which consists of a name, a series of channel configurations, and certain other options.
+
+```toml
+[[preset]]
+name = "strings"
+channel.1 = {mode="auto", inst=41, mute=false, poly=[0,1], range=[55,103]}
+channel.2 = {mode="auto", inst=42, mute=false, poly=[0,1], range=[48,91]}
+channel.3 = {mode="auto", inst=43, mute=false, poly=[0,1], range=[36,76]}
+channel.4 = {mode="auto", inst=44, mute=false, poly=[0,1], range=[28,67]}
+```
+
+You can also set a MIDI file as prompt for each preset. This will cause the intial state of the model to be the end of the prompt file when the preset is selected. Optionally can configure the channels in various ways according to the content of the prompt file.
+
+```toml
+[[preset]]
+name = "prompt"
+prompt_channel = "/path/to/midi_prompt.mid"
+prompt_channel_order = 'instrument'
+prompt_merge_channels = true
+```
+
+With `overlay=True`, a preset will be applied on top of the current configuration. Otherwise, presets will reset anything not specified to a default value, so they always apply the same state.
+
+```toml
+[[preset]]
+name = "unmute_drums"
+overlay = true
+channel.10.mute = false
+```
+
+## Controls
+
+Several global controls can be linked to incoming MIDI on the port specificed by the `--midi_control` argument. Available controls are:
+
+- steer_rate: probabilistically make event rate go up (>0.5) or down (<0.5)
+- steer_velocity: probabilistically make velocity go up (>0.5) or down (<0.5)
+- steer_pitch: probabilistically make pitch go up (>0.5) or down (<0.5)
+- steer_density: probabilistically make note density go up (>0.5) or down (<0.5)
+- pitch_temp: make pitch more or less random (1 is neutral, 0 is deterministic)
+- rhythm_temp: make coarse rythmic timing more or less random (1 is neutral, 0 is deterministic)
+- timing_temp: make fine timing more or less random (1 is neutral, 0 is deterministic)
+
+```toml
+[[control]]
+name = 'steer_rate' # this refers to a specific control in homunculus
+range = [0, 1] # this is the range which gets mapped to MIDI 0-127
+value = 0.45 # initial value
+control_change = [3, 76] # map these MIDI ControlChange numbers to this control
+note_value = {112=0.45, 113=0.55, 114=0.2} # map individual MIDI note values to control values
+```
+
+## Actions
+
+Specific actions within homunculus can also be mapped to incoming MIDI Note or ControlChange messages. Available actions are:
+
+- preset: go to a given preset without resetting
+- reset: reset the Notochord model to initial (or prompted) state
+- preset_reset: go to a preset and immediately reset
+- mute: toggle muting notochord; no auto voices will play while muted
+- sustain: like mute, but does not send NoteOffs, no any sounding notes continue until sustain is stopped
+- stop: ends all notes and clears the pending prediction, so auto voices temporarily stop playing
+
+```toml
+[[action]]
+name = 'preset_reset'
+note = [40] # set when given NoteOn is received
+value = 0 # presets are numbered from 0 here
+
+[[action]]
+name = 'stop'
+control_change = [41] # set when given ControlChange is received
+```
 """
 
 # Authors:
@@ -84,7 +208,7 @@ def main(
 
     midi_prompt:Path=None,
     prompt_config:bool=True, # set channel config based on prompt
-    prompt_channel_order:str=None,
+    prompt_channel_order:str|dict=None,
     prompt_merge:bool=False,
 
     seed:int=0,
@@ -148,40 +272,6 @@ def main(
     torch_device='cpu' # note that cuda/mps unlikely to be faster
     ):
     """
-    This a terminal app for using Notochord interactively with MIDI controllers and synthesizers. It allows combining both 'harmonizer' and 'improviser' features.
-     
-    Arguments to main can be given on the command line as flags, for example:
-
-    `notochord homunculus --config "{1:{mode:auto, inst:1, mute:False}}" --initial-query --max-time 1`
-
-    This says: play the grand piano autonomously on channel 1, start automatically, allow no more than 1 second between MIDI events. A different example:
-
-    `notochord homunculus --config "{1:{mode:input, inst:1, mute:False}, 2:{mode:follow, inst:12, mute:False}}" --thru --send-pc`
-
-    This says, take grand piano input on channel 1, and harmonize it with vibraphone on channel 2. Pass input through to the output, and also send program change messages to set the instruments on the synthesizer.
-
-    You may also need to use the --midi-in or --midi-out flags to get MIDI to the right place.
-    
-    # MIDI Channels
-
-    In homunculus, you have 16 MIDI channels. Each channel can be in one of three modes:
-
-        * input (appearing like "-->01"), channel 1 comes from MIDI input channel 1.
-        * follow (appearing like "01->02"), channel 2 plays whenever channel 1 plays.
-        * auto (appearing like just "03"), channel 3 plays autonomously.
-
-    Click the top section of each channel strip to cycle the mode.
-
-    Each channel is also assigned a [General MIDI instrument](https://en.wikipedia.org/wiki/General_MIDI#Program_change_events). Each 'input' and 'auto' channel should have a unique General MIDI instrument, but 'follow' channels can be duplicates of others. If you try to assign duplicate instruments, they will automatically change to "anonymous" melodic or drum instruments, but still send the right program change messages when using --send-pc.
-
-    Click the middle section of each channel strip to choose a new instrument.
-
-    The bottom section of each channel strip allows muting individual voices.
-
-    # Global controls
-
-    Along the bottom, there are global query, sustain, mute and reset buttons. Query manually replaces the next pending note. Sustain stops all auto voices from playing without ending any open notes. Mute ends all open notes and stops auto voices. Reset ends all open notes, forgets all context and sets the Notochord model to its initial state.
-
     Args:
         checkpoint: path to notochord model checkpoint.
 
@@ -241,12 +331,14 @@ def main(
             but config from the `--config flag` will override the prompt
         prompt_channel_order:
             method to re-order the channels in a MIDI prompt
-            'channel' (default, leave as they are in file)
+            'channel': default, leave as they are in file
             'instrument': sort by instrument ID 
                 (keeping associated anonymous IDs together)
             'instrument_drums': sort by instrument ID,
                 but with drums starting on channel 10
             'notes': sort by most notes
+            if pompt_channel_order is a dict, it is mapping from channel number
+            in the MIDI file to Notochord channel number.
         prompt_merge:
             if True, merge multiple channels with the same GM program into one
             Notochord voice (with overlapping notes dropped or shortened)
